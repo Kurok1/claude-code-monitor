@@ -1,0 +1,23 @@
+server:
+  grpc_listen: "0.0.0.0:4317"
+
+storage:
+  duckdb_path: "./data/monitor.duckdb"
+
+ingest:
+  batch_size: 500              # 单 buffer 满 N 行立即 flush
+  flush_interval: "5s"         # 至少每 N 秒 flush 一次
+  buffer_hard_limit: 50000     # 超过则丢最旧
+
+capture:
+  enabled: false               # 仅采集 OTLP 样本时开启 (P2 起生效)
+  dir: "./captured"
+
+stats:
+  listen: "127.0.0.1:9100"     # "" 禁用；HTTP 监听地址，仅本机访问推荐 127.0.0.1
+  enable_pprof: true           # 暴露 /debug/pprof/* 便于本地排查
+
+
+logging:
+  level: "info"                # debug / info / warn / error
+  format: "json"               # json / text

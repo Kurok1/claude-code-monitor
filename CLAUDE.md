@@ -1,0 +1,248 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## 项目概览
+
+`claude-code-monitor` 是一个 Go 实现的 Claude Code 监控服务：
+
+- **输入**：Claude Code 客户端通过 **OTLP gRPC** 推送的 Metrics 与 Events
+- **存储**：DuckDB 单文件，**一指标 / 一事件 = 一张表**，共 **19 张表**
+- **当前版本（v1）**：只做后端 ingest + 落库；查询 API 与前端放 v2
+
+---
+
+## 必读文档
+
+下面两份是架构基线，新增 / 修改逻辑前必读：
+
+| 文档 | 内容 |
+|---|---|
+| `docs/protocol.md` | 19 个指标 / 事件的 OTLP 数据结构、字段约束、取值范围 |
+| `docs/models.md` | 19 张 DuckDB 表的完整 DDL + 公共列约定 + 写入要点 |
+
+---
+
+## 架构脉络
+
+数据流（**理解此图等于理解整个系统**）：
+
+```
+Claude Code (gRPC client, OTLP/protobuf)
+        │  :4317
+        ▼
+[MetricsServiceServer]  [LogsServiceServer]    ← internal/otlp/*_service.go
+        │                       │
+        │  ExportRequest        │  ExportRequest
+        ▼                       ▼
+              [Dispatcher]                     ← internal/otlp/dispatch.go
+                    │
+       按 metric.name / event.name 路由
+                    │
+        ┌───────────┴───────────┐
+        ▼                       ▼
+  parseXxx()                parseYyy()         ← internal/otlp/{metrics,events}.go
+   → XxxRow                 → YyyRow            （19 个强类型 row struct）
+        │                       │
+        └───────────┬───────────┘
+                    ▼
+              [Sink interface]
+                    │
+                    ▼
+            [BufferedWriter]                    ← internal/store/writer.go
+                    │
+       tableNameFor(row) → 19 个 TableBuffer
+                    │
+       触发：batch_size 行 或 flush_interval
+                    ▼
+              [Appender]                        ← internal/store/appender.go
+                    │
+                    ▼
+                 DuckDB                          单文件，单写者
+```
+
+**关键不变量**：
+- DuckDB **不能跨进程并发写**，应用层全局 mutex 串行化所有 flush
+- 解析器输出的 row struct 字段顺序**必须**与 DDL 列顺序对齐，因为 Appender 是位置式 API
+- 公共属性（user.id / session.id / model 等）在 Resource 层和数据点层都可能出现，**数据点层覆盖 Resource 层**
+- 未识别的 metric / event → `unknown` 日志，不报错；未识别的 attribute → 落入 `attrs JSON` 列
+
+---
+
+## 常用命令
+
+```bash
+# 构建与运行
+go build -o bin/server ./cmd/server
+./bin/server -config config.yaml
+
+# 测试
+go test ./...
+go test -race ./...
+go test ./internal/otlp/ -run TestParseTokenUsage -v   # 单个测试
+
+# 静态检查
+go vet ./...
+gofmt -w .
+goimports -w .
+
+# 模块管理
+go mod tidy
+go mod verify
+
+# DuckDB 数据验证（需安装 duckdb CLI）
+duckdb ./data/monitor.duckdb "SELECT table_name FROM duckdb_tables() ORDER BY 1;"
+duckdb ./data/monitor.duckdb "SELECT COUNT(*) FROM metric_token_usage;"
+```
+
+让 Claude Code 把数据打到本地服务的环境变量：
+
+```bash
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_METRIC_EXPORT_INTERVAL=10000      # 调试时缩短
+export OTEL_LOGS_EXPORT_INTERVAL=5000
+```
+
+---
+
+## Go 开发规范（本项目专用）
+
+### 类型纪律
+
+- **避免 `any` / `interface{}`**：仅以下两处允许使用：
+  - 19 张表的 `attrs` 兜底列（`map[string]any`），用于未识别的 OTLP attribute
+  - `Sink.AppendMetric(row any)` / `AppendEvent(row any)`：内部立刻 type-switch 到具体 row struct
+- **每张表对应一个 row struct**（共 19 个），字段名与列名一一对应；不用 `map[string]string` 代替
+- **可空字段用 `sql.NullXxx`**，直接喂给 go-duckdb Appender，避免双层零值检查
+- 时间统一 `time.Time`（UTC），OTLP 纳秒值除 1000 转微秒精度
+
+### 函数签名
+
+- **接口入参，具体类型出参**（Effective Go 原则）
+- **`context.Context` 始终是第一个参数**，不要塞进 struct
+- **同一函数参数 > 4 个时用 struct 包装**
+
+```go
+// 不推荐
+func NewBuffer(name string, app Appender, size int, interval time.Duration, hardLimit int) *TableBuffer
+
+// 推荐
+func NewBuffer(name string, app Appender, cfg config.IngestConfig) *TableBuffer
+```
+
+### 错误处理
+
+- **始终 wrap 错误并加上下文**：`fmt.Errorf("parse %s: %w", name, err)`
+- **启动期错误 fail-fast**（配置 / 迁移 / 监听失败）：日志 + 非零退出码
+- **运行期错误分级**：
+  - 单条 OTLP 数据点解析失败 → warn + 跳过本行 + `summary.Errors++`，**不中断**整批
+  - 单次 `appender.Flush()` 失败 → error 日志 + **保留 buffer 等下次重试**
+  - 连续 N 次 flush 失败 → 升级告警，进入 degraded 模式
+- **不要忽略错误**：除非真的不在乎（如 `defer w.Close()`），需注释说明
+- **不要用 panic 做控制流**：只在不可恢复的初始化错误中用 `log.Fatal`
+
+### 并发与生命周期
+
+- **DuckDB 单写者**：`*sql.DB.SetMaxOpenConns(1)`，所有 flush 通过应用层 mutex 串行
+- **goroutine 不能裸开**：必须有明确的退出路径（context cancel / channel close / WaitGroup）
+- **优雅关闭顺序**：
+  1. `grpcServer.GracefulStop()`（接受信号后）
+  2. `writer.Stop()`（停 ticker → flush 全部 buffer → close Appender）
+  3. `db.Close()`
+  4. 整体超时 30s，超过强制 `Stop()`
+
+### 包组织
+
+```
+cmd/server/                    # 入口，只做 wire-up，不放业务逻辑
+internal/config/               # YAML 解析 + 默认值 + 校验
+internal/store/                # DuckDB 连接、迁移、Appender、Buffer、Writer
+internal/otlp/                 # 协议层：Server、Service、Parser、Dispatcher、Row 结构体
+internal/ingest/               # （如需）粘合 dispatcher 与 writer
+internal/logging/              # slog 配置
+internal/stats/                # 自监控端点
+```
+
+- **interface 在消费方包定义**（如 `Sink` 在 `internal/otlp` 中），实现可在另一个包
+- **没有 `pkg/`**：本项目不对外提供 API
+- **避免包级可变全局变量**：DB / config / logger 通过参数注入
+
+### 日志
+
+- 统一 `log/slog`，默认 JSON handler，可切 text
+- **键名 snake_case**：`"user_id"` / `"flush_errors"`，不用 camelCase
+- **错误用键传递**：`slog.Error("flush failed", "table", name, "err", err)`，**不要**把错误拼进 message
+- 频次约束：每个 OTLP Export 一条 `Info` 摘要；逐行 / 逐数据点用 `Debug`
+
+### 测试
+
+- **golden testdata 用真实 protobuf**：原样放进 `testdata/`，不要手写 OTLP 消息
+- **每个 parser 至少一个 golden case**；典型分支（accept/reject、success/error）各一例
+- **`go test -race` 默认开启**：buffer 的并发路径必须无竞争
+- 不写无意义的 mock 框架，简单 `countingSink` / `fakeAppender` 足够
+
+### 性能与内存
+
+- **切片预分配**：已知容量（如 `make([]any, 0, batchSize)`）必须用 `make` 而非裸 `append`
+- **字符串拼接**：在循环里用 `strings.Builder`，单点拼接用 `+` 即可
+- **不要过早优化**：先确认是热路径再上 `sync.Pool` 等手段
+
+---
+
+## 反模式（本项目禁止）
+
+```go
+// ❌ 用 map 代替 row struct
+type Row map[string]any
+
+// ❌ 全局可变 DB
+var db *sql.DB
+func init() { db, _ = sql.Open(...) }
+
+// ❌ 忽略错误
+result, _ := proto.Marshal(req)
+
+// ❌ panic 替代错误返回
+func parseToken(...) Row {
+    if dp.Value == nil { panic("nil value") }
+}
+
+// ❌ Context 塞进 struct
+type Request struct { ctx context.Context; ... }
+
+// ❌ 解析时直接写库（破坏分层边界）
+func (s *MetricsService) Export(...) {
+    row := parseTokenUsage(dp)
+    db.Exec("INSERT ...")    // 错：应通过 Sink
+}
+
+// ❌ 在循环里频繁开关 Appender
+for _, row := range rows {
+    app, _ := duckdb.NewAppender(...)
+    app.AppendRow(row...)
+    app.Close()
+}
+```
+
+---
+
+## 决策回溯锚点
+
+以下决策已经拍板，**请勿在未经讨论的情况下改动**：
+
+| 决策 | 理由 |
+|---|---|
+| 仅支持 gRPC，不支持 HTTP/protobuf | gRPC 已覆盖默认场景，stub 直接给 Export 签名，实现更简洁 |
+| YAML 单一配置源，不引入 koanf / viper | 单一来源够用，`yaml.v3` 直接 Unmarshal 即可 |
+| 一指标/事件一表（19 张窄表） | 避免大宽表 schema 漂移，详见 `docs/models.md` §1 |
+| 未识别字段进 `attrs JSON` 兜底 | Claude Code 升级新增 attribute 时无需迁移 |
+| Query API 推迟到 v2 | 没有前端需求时定义 API 容易过度设计 |
+| `TIMESTAMP` 微秒精度而非 `TIMESTAMP_NS` | 兼容外部 BI 工具；详见 `docs/models.md` §5.1 |
+| 全局 mutex 串行 flush | DuckDB 单写者约束；监控吞吐远低于其极限，简单优先 |
+| 背压策略：丢最旧 + 日志，不反压客户端 | OTLP SDK 自身就会丢，监控不能阻塞客户端 |

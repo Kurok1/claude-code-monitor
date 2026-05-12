@@ -1,0 +1,10 @@
+bin/
+data/
+captured/
+*.duckdb
+*.duckdb.wal
+.DS_Store
+config.yaml
+config.capture.yaml
+/smoke
+
