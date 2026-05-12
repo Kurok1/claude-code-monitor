@@ -59,8 +59,10 @@ jobs:
         if: matrix.goos == 'windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
-          install: mingw-w64-x86_64-gcc
+          # duckdb-go-bindings ships UCRT-built static libs; MSVCRT toolchain
+          # (MINGW64) fails to link with undefined __stdio_common_* refs.
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf zip
           path-type: inherit
 
       - name: Build (unix)
