@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - target: darwin-amd64
+            os: macos-13
+            goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - target: darwin-arm64
+            os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - target: windows-amd64
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Configure MinGW (windows)
+        if: matrix.goos == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Build (unix)
+        if: matrix.goos != 'windows'
+        env:
+          CGO_ENABLED: '1'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
+          go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
+          cp README.md CLAUDE.md config.example.yaml "dist/${NAME}/"
+          cp -R docs scripts "dist/${NAME}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
+
+      - name: Build (windows)
+        if: matrix.goos == 'windows'
+        shell: msys2 {0}
+        env:
+          CGO_ENABLED: '1'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
+          go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
+          cp README.md CLAUDE.md config.example.yaml "dist/${NAME}/"
+          cp -R docs scripts "dist/${NAME}/"
+          ( cd dist && /usr/bin/zip -r "${NAME}.zip" "${NAME}" )
+          ( cd dist && sha256sum "${NAME}.zip" > "${NAME}.zip.sha256" )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 > checksums.txt
+          ls -lh
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
