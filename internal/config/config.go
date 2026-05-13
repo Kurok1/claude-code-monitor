@@ -9,12 +9,13 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Storage StorageConfig `yaml:"storage"`
-	Ingest  IngestConfig  `yaml:"ingest"`
-	Capture CaptureConfig `yaml:"capture"`
-	Stats   StatsConfig   `yaml:"stats"`
-	Logging LoggingConfig `yaml:"logging"`
+	Server    ServerConfig    `yaml:"server"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Ingest    IngestConfig    `yaml:"ingest"`
+	Capture   CaptureConfig   `yaml:"capture"`
+	Stats     StatsConfig     `yaml:"stats"`
+	Dashboard DashboardConfig `yaml:"dashboard"`
+	Logging   LoggingConfig   `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -39,6 +40,16 @@ type CaptureConfig struct {
 type StatsConfig struct {
 	Listen      string `yaml:"listen"`       // "" disables the stats HTTP server
 	EnablePProf bool   `yaml:"enable_pprof"` // when true, /debug/pprof/* is registered
+}
+
+type DashboardConfig struct {
+	TopN     TopNConfig `yaml:"top_n"`
+	Timezone string     `yaml:"timezone"` // IANA name, e.g. "Asia/Shanghai"
+}
+
+type TopNConfig struct {
+	Tools  int `yaml:"tools"`
+	Skills int `yaml:"skills"`
 }
 
 type LoggingConfig struct {
@@ -106,6 +117,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.Stats.Listen == "" {
 		cfg.Stats.Listen = "127.0.0.1:9100"
 	}
+	if cfg.Dashboard.TopN.Tools == 0 {
+		cfg.Dashboard.TopN.Tools = 10
+	}
+	if cfg.Dashboard.TopN.Skills == 0 {
+		cfg.Dashboard.TopN.Skills = 10
+	}
+	if cfg.Dashboard.Timezone == "" {
+		cfg.Dashboard.Timezone = "Asia/Shanghai"
+	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
@@ -130,6 +150,15 @@ func validate(cfg *Config) error {
 	if cfg.Ingest.BufferHardLimit < cfg.Ingest.BatchSize {
 		return fmt.Errorf("ingest.buffer_hard_limit (%d) must be >= batch_size (%d)",
 			cfg.Ingest.BufferHardLimit, cfg.Ingest.BatchSize)
+	}
+	if cfg.Dashboard.TopN.Tools <= 0 {
+		return fmt.Errorf("dashboard.top_n.tools must be > 0")
+	}
+	if cfg.Dashboard.TopN.Skills <= 0 {
+		return fmt.Errorf("dashboard.top_n.skills must be > 0")
+	}
+	if _, err := time.LoadLocation(cfg.Dashboard.Timezone); err != nil {
+		return fmt.Errorf("dashboard.timezone %q: %w", cfg.Dashboard.Timezone, err)
 	}
 	switch cfg.Logging.Level {
 	case "debug", "info", "warn", "error":

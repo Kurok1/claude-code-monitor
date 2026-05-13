@@ -2,8 +2,10 @@
 # Claude Code SessionStart / SessionResume hook entry.
 #
 # Idempotent: starts the monitor in the background if no instance is currently
-# listening on the configured gRPC port. The server itself does a preflight
-# check, so repeated hook firings are no-ops (~14ms each).
+# listening on the configured gRPC port. We pass `-skip-if-running` so the
+# server short-circuits (~14ms) when an instance is already up — without it,
+# the default behavior is to restart the running instance, which would cycle
+# the monitor on every session start.
 #
 # Designed to be called with no arguments. Repo root is resolved from the
 # script's own path so it works regardless of the hook's cwd.
@@ -37,8 +39,8 @@ if [ ! -f "$CONFIG" ]; then
     exit 0
 fi
 
-# Spawn detached. The server's own preflight (alreadyListening) short-circuits
-# if something is already bound on grpc_listen, so we don't probe here.
-nohup "$BIN" -config "$CONFIG" >> "$LOG" 2>&1 &
+# Spawn detached. With -skip-if-running, the server's preflight exits 0 if
+# something is already bound on grpc_listen, so we don't probe here.
+nohup "$BIN" -config "$CONFIG" -skip-if-running >> "$LOG" 2>&1 &
 disown
 exit 0

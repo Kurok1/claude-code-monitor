@@ -17,6 +17,11 @@ stats:
   listen: "127.0.0.1:9100"     # "" 禁用；HTTP 监听地址，仅本机访问推荐 127.0.0.1
   enable_pprof: true           # 暴露 /debug/pprof/* 便于本地排查
 
+dashboard:
+  top_n:
+    tools: 10                  # 工具排名 Top N
+    skills: 10                 # Skill 排名 Top N
+  timezone: "Asia/Shanghai"    # 业务时区，全部时间窗按此切分
 
 logging:
   level: "info"                # debug / info / warn / error

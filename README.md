@@ -35,11 +35,19 @@ Claude Code (gRPC)
 
 ### 1. 构建
 
+仅后端：
 ```bash
 go build -o bin/server ./cmd/server
 ```
 
 依赖 CGO（go-duckdb），首次构建会拉取 DuckDB 静态库。
+
+含前端（一键打前端 + Go 嵌入产出单二进制）：
+```bash
+./scripts/build-all.sh
+```
+
+脚本内部依次：`npm install && npm run build`（产物写入 `internal/web/dist/`）→ `go build -trimpath -o bin/server ./cmd/server`（用 `//go:embed` 嵌入 dist）。
 
 ### 2. 启动 server
 
@@ -57,9 +65,28 @@ cp config.example.yaml config.yaml
 启动后会看到：
 ```
 buffered writer ready  tables=19
-stats server listening addr=127.0.0.1:9100
+stats server listening addr=127.0.0.1:9100 web_ui=true
 grpc server listening  addr=127.0.0.1:4317
 ```
+
+服务暴露两个端口：
+
+| 端口 | 协议 | 用途 |
+|---|---|---|
+| `4317` | gRPC (HTTP/2) | OTLP 接收，**只接 Claude Code，不要用浏览器访问** |
+| `9100` | HTTP/1.1 | Web UI（`/`）+ 查询 API（`/api/usage/*`）+ stats（`/internal/*`）+ pprof（`/debug/pprof/*`） |
+
+浏览器访问 **`http://localhost:9100/`** 即可看到前端看板。**前提**：先在 `frontend/` 跑过 `npm run build`，二进制重新 `go build` 一次（前端产物通过 `//go:embed` 嵌入）。前端没构建时 server 启动日志里会有 `web UI not mounted`，`/` 会回落到原先的纯文本说明页。
+
+**端口已被占用时的默认行为是 restart**：server 启动前会探测 `grpc_listen`，若有其它进程在监听，用 `lsof` 查出 PID 后发 `SIGTERM`，等端口释放（最多 5s），仍未释放则升级为 `SIGKILL`（再等 2s）。开发时反复 `./bin/server` 不需要手动 `pkill`。
+
+如果你希望保持"端口被占用就什么都不做"的幂等语义（典型场景：Claude Code SessionStart hook），加 `-skip-if-running`：
+
+```bash
+./bin/server -config config.yaml -skip-if-running   # 已有实例就 exit 0
+```
+
+> 平台说明：restart 实现依赖 `lsof`（macOS / Linux 自带）。Windows 暂未实现自动 restart，重复启动会因 PID 解析失败返回错误；请手动 `taskkill` 或加 `-skip-if-running`。
 
 ### 3. 把 Claude Code 指向本服务
 
@@ -120,7 +147,7 @@ duckdb data/monitor.duckdb "
 
 ## 用 Claude Code Hook 自动启动（可选）
 
-不想每次手动开 server，可以挂到 Claude Code 的 SessionStart / SessionResume 钩子。仓库里提供了一个幂等脚本 `scripts/hook-session-start.sh`：缺二进制会自动 `go build`，缺 `config.yaml` 会从 `config.example.yaml` 复制，最后用 `nohup` 后台拉起 server。**server 自己有 preflight：gRPC 端口已被占用就在 ~14ms 内 exit 0**，所以重复触发完全安全。
+不想每次手动开 server，可以挂到 Claude Code 的 SessionStart / SessionResume 钩子。仓库里提供了一个幂等脚本 `scripts/hook-session-start.sh`：缺二进制会自动 `go build`，缺 `config.yaml` 会从 `config.example.yaml` 复制，最后用 `nohup` 后台拉起 server。**脚本会传 `-skip-if-running`，使 server preflight 在 gRPC 端口已被占用时 ~14ms 内 exit 0**，所以重复触发完全安全（不会反复 cycle 现有实例）。
 
 在 `~/.claude/settings.json` 里加入：
 
@@ -157,7 +184,9 @@ curl -s http://127.0.0.1:9100/internal/stats       # 累计指标
 pkill -TERM -f 'bin/server -config'                # 手动停
 ```
 
-注意：preflight 只 probe `grpc_listen` 端口，不区分占用者身份。若 4317 被别的进程占了（其它 OTLP collector 等），hook 也会静默退出 0，server 日志里会有 `another instance appears to be listening` 一行可循。
+注意：preflight 只 probe `grpc_listen` 端口，不区分占用者身份。若 4317 被别的进程占了（其它 OTLP collector 等）：
+- 加了 `-skip-if-running`（hook 默认）：server 静默退出 0，日志里有 `another instance is listening; -skip-if-running set, exiting`。
+- 默认 restart 模式：用 `lsof` 找到占用 PID 后发 `SIGTERM`，即使对端不是本服务也会被杀。注意别把端口配错。
 
 ---
 
@@ -172,8 +201,11 @@ pkill -TERM -f 'bin/server -config'                # 手动停
 | `ingest` | `buffer_hard_limit` | `50000` | 超过则丢最旧 + 计数 |
 | `capture` | `enabled` | `false` | 开启后原始 OTLP protobuf 字节落盘到 `dir`，用于 P3 testdata 或调试 |
 | `capture` | `dir` | `./captured` | 采样目录 |
-| `stats` | `listen` | `127.0.0.1:9100` | HTTP 自监控端口，留空禁用 |
+| `stats` | `listen` | `127.0.0.1:9100` | HTTP 端口（同时承载 Web UI、查询 API、stats、pprof），留空则全禁用 |
 | `stats` | `enable_pprof` | `false` | 注册 `/debug/pprof/*`，建议本地调试时开 |
+| `dashboard` | `top_n.tools` | `10` | 工具排名 Top N |
+| `dashboard` | `top_n.skills` | `10` | Skill 排名 Top N |
+| `dashboard` | `timezone` | `Asia/Shanghai` | 业务时区，所有时间窗按此切分 |
 | `logging` | `level` | `info` | `debug` / `info` / `warn` / `error` |
 | `logging` | `format` | `json` | `json` / `text` |
 
@@ -181,11 +213,26 @@ pkill -TERM -f 'bin/server -config'                # 手动停
 
 ## 运维工具
 
-### Stats 端点
+### Web UI / Stats 端点
+
+`stats.listen`（默认 `127.0.0.1:9100`）上同时提供：
+
+```
+GET /                                       Web UI（SPA，前端构建后才有）
+GET /api/usage/snapshot?range=day|week|month  KPI（tokens/cost/cache 按 range 切）+ 模型明细
+GET /api/usage/trends?range=day|week|month  各模型 Token 用量趋势
+GET /api/usage/rankings?since=7d|30d|all    工具 + Skill Top10 排名
+GET /internal/healthz                       liveness
+GET /internal/stats                         per-table buffer 计数
+GET /debug/pprof/*                          运行时 profile（enable_pprof: true 时）
+```
+
+查询 API 设计与每个端点的 SQL 见 [`docs/plan-v2-query-api.md`](docs/plan-v2-query-api.md)。响应统一带 `Cache-Control: private, max-age=30`，所有时间窗按 `dashboard.timezone`（默认 `Asia/Shanghai`）切分。
 
 ```bash
 curl http://127.0.0.1:9100/internal/healthz   # liveness
 curl http://127.0.0.1:9100/internal/stats     # per-table buffer 计数
+open  http://127.0.0.1:9100/                  # 浏览器打开看板
 ```
 
 `/internal/stats` 输出（节选）：
@@ -238,6 +285,7 @@ go tool pprof http://127.0.0.1:9100/debug/pprof/heap
 | `flush_errors` 非零 | 看 server 日志 ERROR；通常是磁盘满或文件损坏 |
 | 重启后 `attrs` 抽不出字段 | 老版本 `attrs` 列曾用 `JSON` 类型导致双重转义；当前是 `VARCHAR`，旧数据需清表重新写入 |
 | `.duckdb` 文件不收敛 | `duckdb data/monitor.duckdb "PRAGMA force_checkpoint;"` 手工强制 checkpoint |
+| 启动报 `stop existing instance: locate listener` | `lsof` 没装或权限不足。临时方案：加 `-skip-if-running` 让 server 直接退出，或 `pkill -f bin/server` 后再启 |
 
 ---
 

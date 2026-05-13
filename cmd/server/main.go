@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/kuroky/claude-code-monitor/internal/config"
+	"github.com/kuroky/claude-code-monitor/internal/dashboard"
 	"github.com/kuroky/claude-code-monitor/internal/logging"
 	"github.com/kuroky/claude-code-monitor/internal/otlp"
 	"github.com/kuroky/claude-code-monitor/internal/stats"
 	"github.com/kuroky/claude-code-monitor/internal/store"
+	"github.com/kuroky/claude-code-monitor/internal/web"
 )
 
 const shutdownTimeout = 30 * time.Second
@@ -28,8 +30,13 @@ func main() {
 }
 
 func run() error {
-	var configPath string
+	var (
+		configPath    string
+		skipIfRunning bool
+	)
 	flag.StringVar(&configPath, "config", "./config.yaml", "path to YAML config file")
+	flag.BoolVar(&skipIfRunning, "skip-if-running", false,
+		"if another instance is already listening on grpc_listen, exit 0 instead of restarting it (used by SessionStart hooks)")
 	flag.Parse()
 
 	cfg, err := config.Load(configPath)
@@ -39,13 +46,21 @@ func run() error {
 
 	logging.Setup(cfg.Logging)
 
-	// Pre-flight: if a monitor (or anything) is already on grpc_listen, exit 0.
-	// Lets us be wired into Claude Code SessionStart / SessionResume hooks
-	// idempotently — duplicate spawns from rapid session activity are no-ops.
+	// Pre-flight: something is already on grpc_listen.
+	// Default behavior is restart — find the existing PID, SIGTERM it, wait
+	// for the port to free, escalate to SIGKILL if needed. This makes
+	// `./bin/server` reload semantics painless during development.
+	// Hook integrations that want idempotent spawns should pass
+	// `-skip-if-running` instead so duplicate firings are no-ops.
 	if alreadyListening(cfg.Server.GRPCListen) {
-		slog.Info("another instance appears to be listening; exiting",
-			"grpc_listen", cfg.Server.GRPCListen)
-		return nil
+		if skipIfRunning {
+			slog.Info("another instance is listening; -skip-if-running set, exiting",
+				"grpc_listen", cfg.Server.GRPCListen)
+			return nil
+		}
+		if err := stopExistingInstance(cfg.Server.GRPCListen, slog.Default()); err != nil {
+			return fmt.Errorf("stop existing instance: %w", err)
+		}
 	}
 
 	db, err := store.Open(cfg.Storage)
@@ -73,6 +88,12 @@ func run() error {
 	writer.Start()
 
 	statsSrv := stats.NewServer(cfg.Stats, writer, slog.Default())
+	if webHandler, err := web.Handler(); err == nil {
+		statsSrv.SetRootHandler(webHandler)
+	} else {
+		slog.Warn("web UI not mounted", "err", err)
+	}
+	statsSrv.SetAPIHandler(dashboard.NewHandler(db.SQL, cfg.Dashboard, slog.Default()))
 	if err := statsSrv.Start(); err != nil {
 		_ = writer.Stop()
 		return fmt.Errorf("init stats server: %w", err)
@@ -142,4 +163,3 @@ func alreadyListening(addr string) bool {
 	_ = conn.Close()
 	return true
 }
-

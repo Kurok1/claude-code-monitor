@@ -18,12 +18,18 @@ import (
 // Server runs a small HTTP listener exposing /internal/healthz, /internal/stats
 // and (optionally) /debug/pprof/*. The data source is BufferedWriter.Stats(),
 // kept in-process so we do not introduce a Prometheus dep just for self-checks.
+//
+// Callers can mount an additional handler on "/" via SetRootHandler — used to
+// serve the embedded SPA on the same port without spinning up a second
+// listener.
 type Server struct {
-	cfg       config.StatsConfig
-	writer    *store.BufferedWriter
-	log       *slog.Logger
-	startTime time.Time
-	srv       *http.Server
+	cfg         config.StatsConfig
+	writer      *store.BufferedWriter
+	log         *slog.Logger
+	startTime   time.Time
+	srv         *http.Server
+	rootHandler http.Handler
+	apiHandler  http.Handler
 }
 
 func NewServer(cfg config.StatsConfig, writer *store.BufferedWriter, log *slog.Logger) *Server {
@@ -33,6 +39,21 @@ func NewServer(cfg config.StatsConfig, writer *store.BufferedWriter, log *slog.L
 		log:       log,
 		startTime: time.Now(),
 	}
+}
+
+// SetRootHandler registers an http.Handler at "/", replacing the plain-text
+// landing page. The stats endpoints (/internal/*, /debug/pprof/*) still take
+// precedence — ServeMux routes the more specific prefix first. Must be called
+// before Start.
+func (s *Server) SetRootHandler(h http.Handler) {
+	s.rootHandler = h
+}
+
+// SetAPIHandler mounts an http.Handler at the "/api/" prefix. Used for the
+// dashboard query API; ServeMux routes the prefix more specifically than "/"
+// so the SPA root handler still gets everything else. Must be called before Start.
+func (s *Server) SetAPIHandler(h http.Handler) {
+	s.apiHandler = h
 }
 
 // Start binds the HTTP listener in a goroutine. When cfg.Listen is empty the
@@ -46,7 +67,14 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/internal/healthz", s.handleHealth)
 	mux.HandleFunc("/internal/stats", s.handleStats)
-	mux.HandleFunc("/", s.handleIndex)
+	if s.apiHandler != nil {
+		mux.Handle("/api/", s.apiHandler)
+	}
+	if s.rootHandler != nil {
+		mux.Handle("/", s.rootHandler)
+	} else {
+		mux.HandleFunc("/", s.handleIndex)
+	}
 
 	if s.cfg.EnablePProf {
 		mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -63,7 +91,12 @@ func (s *Server) Start() error {
 	}
 
 	go func() {
-		s.log.Info("stats server listening", "addr", s.cfg.Listen, "pprof", s.cfg.EnablePProf)
+		s.log.Info("stats server listening",
+			"addr", s.cfg.Listen,
+			"pprof", s.cfg.EnablePProf,
+			"web_ui", s.rootHandler != nil,
+			"api", s.apiHandler != nil,
+		)
 		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			s.log.Error("stats server", "err", err)
 		}

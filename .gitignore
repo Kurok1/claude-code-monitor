@@ -8,3 +8,11 @@ config.yaml
 config.capture.yaml
 /smoke
 
+# Frontend
+node_modules/
+frontend/dist/
+
+# Embedded SPA assets produced by `npm run build` in frontend/.
+# Keep the directory (so //go:embed compiles) but ignore the build output.
+internal/web/dist/*
+!internal/web/dist/.gitkeep
