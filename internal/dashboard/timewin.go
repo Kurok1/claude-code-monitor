@@ -103,8 +103,10 @@ func addMonths(t time.Time, months int) time.Time {
 //     isn't artificially truncated (DuckDB SUM gives the same number
 //     either way, but the upper bound stays aligned with the bucket).
 //
-// PreviousEnd is clamped to the same elapsed duration as the current
-// partial period, so the "上期 vs 本期" delta compares apples to apples.
+// Previous covers the FULL prior calendar period (yesterday / last week /
+// last month) regardless of how far we are into the current one. The
+// "↑/↓ vs 昨日" badge thus reads as "today-so-far vs yesterday-total",
+// which matches how users naturally interpret the comparison.
 type WindowSpec struct {
 	Range          string // day / week / month
 	CurrentStart   time.Time
@@ -125,39 +127,36 @@ func (w TimeWindow) Resolve(rng string) (WindowSpec, error) {
 	// the operator's mental model when debugging.
 	switch rng {
 	case "day":
-		elapsed := w.NowUTC.Sub(w.TodayStartUTC)
 		return WindowSpec{
 			Range:          "day",
 			CurrentStart:   w.TodayStartUTC.In(w.Loc),
 			CurrentEnd:     w.NowUTC.In(w.Loc),
 			PreviousStart:  w.YesterdayStartUTC.In(w.Loc),
-			PreviousEnd:    clampPrevEnd(w.YesterdayStartUTC.Add(elapsed), w.TodayStartUTC).In(w.Loc),
+			PreviousEnd:    w.TodayStartUTC.In(w.Loc),
 			PeriodEnd:      w.TodayEndUTC.In(w.Loc),
 			SparklineStart: w.DayTrendStartUTC.In(w.Loc),
 			SparklineGrain: "day",
 			SparklineCount: 14,
 		}, nil
 	case "week":
-		elapsed := w.NowUTC.Sub(w.WeekStartUTC)
 		return WindowSpec{
 			Range:          "week",
 			CurrentStart:   w.WeekStartUTC.In(w.Loc),
 			CurrentEnd:     w.NowUTC.In(w.Loc),
 			PreviousStart:  w.LastWeekStartUTC.In(w.Loc),
-			PreviousEnd:    clampPrevEnd(w.LastWeekStartUTC.Add(elapsed), w.WeekStartUTC).In(w.Loc),
+			PreviousEnd:    w.WeekStartUTC.In(w.Loc),
 			PeriodEnd:      w.NextWeekStartUTC.In(w.Loc),
 			SparklineStart: w.WeekTrendStartUTC.In(w.Loc),
 			SparklineGrain: "week",
 			SparklineCount: 12,
 		}, nil
 	case "month":
-		elapsed := w.NowUTC.Sub(w.MonthStartUTC)
 		return WindowSpec{
 			Range:          "month",
 			CurrentStart:   w.MonthStartUTC.In(w.Loc),
 			CurrentEnd:     w.NowUTC.In(w.Loc),
 			PreviousStart:  w.LastMonthStartUTC.In(w.Loc),
-			PreviousEnd:    clampPrevEnd(w.LastMonthStartUTC.Add(elapsed), w.MonthStartUTC).In(w.Loc),
+			PreviousEnd:    w.MonthStartUTC.In(w.Loc),
 			PeriodEnd:      w.NextMonthStartUTC.In(w.Loc),
 			SparklineStart: w.MonthTrendStartUTC.In(w.Loc),
 			SparklineGrain: "month",
@@ -166,15 +165,6 @@ func (w TimeWindow) Resolve(rng string) (WindowSpec, error) {
 	default:
 		return WindowSpec{}, fmt.Errorf("invalid range %q: want day|week|month", rng)
 	}
-}
-
-// clampPrevEnd guards against the Feb-vs-Mar case where previousStart +
-// elapsed can overshoot currentStart (previous month has fewer days).
-func clampPrevEnd(prevEnd, currentStart time.Time) time.Time {
-	if prevEnd.After(currentStart) {
-		return currentStart
-	}
-	return prevEnd
 }
 
 // SinceStart returns the UTC instant for `since`, plus the validated form.

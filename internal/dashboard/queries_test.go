@@ -130,19 +130,14 @@ func TestQueryPeriodTokens_Day(t *testing.T) {
 func TestQueryPeriodTokens_Week(t *testing.T) {
 	db, w, _ := testDB(t)
 	spec, _ := w.Resolve("week")
-	// This week's Monday is 2026-05-11 00:00 SH; "now" is Wed 10:00 SH
-	// (2d 10h elapsed). Previous window is [last Mon 00:00, last Wed 10:00).
+	// This week's Monday is 2026-05-11 00:00 SH.
 
 	// Put a row at SH 2026-05-12 (Tue) — inside this week.
 	insertTokenUsage(t, db, spec.CurrentStart.Add(24*time.Hour+time.Hour),
 		"claude-opus-4-1", "input", 200)
-	// Put a row at SH last Tue 01:00 — inside the clamped previous window.
-	insertTokenUsage(t, db, spec.PreviousStart.Add(24*time.Hour+time.Hour),
-		"claude-opus-4-1", "input", 500)
-	// SH last Sat — would have been "previous week" pre-clamp, but is now
-	// outside [PreviousStart, PreviousEnd). Must not be counted in prev.
+	// Put a row at SH 2026-05-09 (Sat last week) — previous week.
 	insertTokenUsage(t, db, spec.PreviousStart.Add(5*24*time.Hour+time.Hour),
-		"claude-opus-4-1", "input", 777)
+		"claude-opus-4-1", "input", 500)
 	// Way out of range
 	insertTokenUsage(t, db, spec.PreviousStart.Add(-24*time.Hour), "claude-opus-4-1", "input", 999)
 

@@ -91,14 +91,13 @@ func TestWindowSpec_Resolve(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Current: today 00:00 SH → now. Elapsed = 10h.
+		// Current: today 00:00 SH → now.
 		if !s.CurrentStart.Equal(w.TodayStartUTC) || !s.CurrentEnd.Equal(nowUTC) {
 			t.Errorf("day current = [%v, %v), want [TodayStart, NowUTC)", s.CurrentStart, s.CurrentEnd)
 		}
-		// Previous: yesterday 00:00 SH → +10h (same elapsed) = 2026-05-12 02:00 UTC.
-		wantPrevEnd := time.Date(2026, 5, 12, 2, 0, 0, 0, time.UTC)
-		if !s.PreviousStart.Equal(w.YesterdayStartUTC) || !s.PreviousEnd.Equal(wantPrevEnd) {
-			t.Errorf("day previous = [%v, %v), want PrevEnd %v", s.PreviousStart, s.PreviousEnd, wantPrevEnd)
+		// Previous: full yesterday — [yesterday 00:00, today 00:00).
+		if !s.PreviousStart.Equal(w.YesterdayStartUTC) || !s.PreviousEnd.Equal(w.TodayStartUTC) {
+			t.Errorf("day previous = [%v, %v), want full yesterday", s.PreviousStart, s.PreviousEnd)
 		}
 		if !s.PeriodEnd.Equal(w.TodayEndUTC) {
 			t.Errorf("day PeriodEnd = %v, want TodayEndUTC %v", s.PeriodEnd, w.TodayEndUTC)
@@ -114,16 +113,14 @@ func TestWindowSpec_Resolve(t *testing.T) {
 			t.Fatal(err)
 		}
 		// This week's Monday in SH is 2026-05-11 (UTC 2026-05-10 16:00).
-		// Elapsed-into-week = 2d 10h.
 		wantMon := time.Date(2026, 5, 10, 16, 0, 0, 0, time.UTC)
 		if !s.CurrentStart.Equal(wantMon) || !s.CurrentEnd.Equal(nowUTC) {
 			t.Errorf("week current = [%v, %v), want [Mon, Now)", s.CurrentStart, s.CurrentEnd)
 		}
-		// Previous: last Mon 00:00 SH (2026-05-03 SH = 2026-05-03 -8h UTC = 2026-05-02 16:00 UTC) + 2d 10h.
+		// Previous: full last week — [last Mon, this Mon).
 		wantLastMon := wantMon.Add(-7 * 24 * time.Hour)
-		wantPrevEnd := wantLastMon.Add(2*24*time.Hour + 10*time.Hour)
-		if !s.PreviousStart.Equal(wantLastMon) || !s.PreviousEnd.Equal(wantPrevEnd) {
-			t.Errorf("week previous = [%v, %v), want [%v, %v)", s.PreviousStart, s.PreviousEnd, wantLastMon, wantPrevEnd)
+		if !s.PreviousStart.Equal(wantLastMon) || !s.PreviousEnd.Equal(wantMon) {
+			t.Errorf("week previous = [%v, %v), want full last week", s.PreviousStart, s.PreviousEnd)
 		}
 		if !s.PeriodEnd.Equal(wantMon.Add(7 * 24 * time.Hour)) {
 			t.Errorf("week PeriodEnd = %v, want next Mon", s.PeriodEnd)
@@ -139,33 +136,21 @@ func TestWindowSpec_Resolve(t *testing.T) {
 			t.Fatal(err)
 		}
 		// May 1 SH = 2026-04-30 16:00 UTC; June 1 SH = 2026-05-31 16:00 UTC; Apr 1 SH = 2026-03-31 16:00 UTC.
-		// Elapsed-into-May = 12d 10h.
 		wantMay := time.Date(2026, 4, 30, 16, 0, 0, 0, time.UTC)
 		wantJun := time.Date(2026, 5, 31, 16, 0, 0, 0, time.UTC)
 		wantApr := time.Date(2026, 3, 31, 16, 0, 0, 0, time.UTC)
-		wantPrevEnd := wantApr.Add(12*24*time.Hour + 10*time.Hour)
 		if !s.CurrentStart.Equal(wantMay) || !s.CurrentEnd.Equal(nowUTC) {
 			t.Errorf("month current = [%v, %v), want [May1, Now)", s.CurrentStart, s.CurrentEnd)
 		}
-		if !s.PreviousStart.Equal(wantApr) || !s.PreviousEnd.Equal(wantPrevEnd) {
-			t.Errorf("month previous = [%v, %v), want [%v, %v)", s.PreviousStart, s.PreviousEnd, wantApr, wantPrevEnd)
+		// Previous: full last month — [Apr 1, May 1).
+		if !s.PreviousStart.Equal(wantApr) || !s.PreviousEnd.Equal(wantMay) {
+			t.Errorf("month previous = [%v, %v), want full April", s.PreviousStart, s.PreviousEnd)
 		}
 		if !s.PeriodEnd.Equal(wantJun) {
 			t.Errorf("month PeriodEnd = %v, want Jun1", s.PeriodEnd)
 		}
 		if s.SparklineGrain != "month" || s.SparklineCount != 12 {
 			t.Errorf("month spark = %s × %d", s.SparklineGrain, s.SparklineCount)
-		}
-	})
-
-	t.Run("clamp_feb_to_march", func(t *testing.T) {
-		// Mar 31 14:00 SH — prev month (Feb) is shorter; previousStart + elapsed
-		// would overshoot March 1. PreviousEnd must clamp to March 1.
-		mar31 := time.Date(2026, 3, 31, 14, 0, 0, 0, loc)
-		ww, _ := NowWindow(mar31, "Asia/Shanghai")
-		s, _ := ww.Resolve("month")
-		if !s.PreviousEnd.Equal(ww.MonthStartUTC) {
-			t.Errorf("clamp: PreviousEnd = %v, want MonthStartUTC %v", s.PreviousEnd, ww.MonthStartUTC)
 		}
 	})
 
