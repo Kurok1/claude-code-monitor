@@ -15,6 +15,12 @@ import (
 type TimeWindow struct {
 	Loc *time.Location
 
+	// NowUTC is the wall-clock instant the window is rooted at. KPI queries
+	// (tokens / cost / cache) use this as their upper bound so partial
+	// periods report "since-period-start until now" rather than "full
+	// calendar period including future".
+	NowUTC time.Time
+
 	// Period anchors — all UTC instants of local 00:00 boundaries.
 	TodayStartUTC     time.Time
 	TodayEndUTC       time.Time
@@ -55,6 +61,7 @@ func windowAt(nowInLoc time.Time, loc *time.Location) TimeWindow {
 
 	return TimeWindow{
 		Loc:                loc,
+		NowUTC:             nowInLoc.UTC(),
 		TodayStartUTC:      todayStart.UTC(),
 		TodayEndUTC:        todayStart.Add(24 * time.Hour).UTC(),
 		YesterdayStartUTC:  todayStart.Add(-24 * time.Hour).UTC(),
@@ -85,55 +92,89 @@ func addMonths(t time.Time, months int) time.Time {
 // WindowSpec is the resolved current/previous/sparkline boundaries for a
 // chosen range. All KPI queries take a WindowSpec and treat the boundaries
 // uniformly, so the range-dependent logic lives in one place (Resolve).
+//
+// Two upper bounds exist on purpose:
+//   - CurrentEnd = NowUTC. KPI cards (tokens / cost / cache) report the
+//     partial period "from period-start to now" — not the full calendar
+//     period — so a 16:00 reading on Monday is honest about being 16/168
+//     of the way through the week.
+//   - PeriodEnd = the calendar boundary (tomorrow 00:00 / next Monday /
+//     next month's day 1). Sparkline queries use this so the last bucket
+//     isn't artificially truncated (DuckDB SUM gives the same number
+//     either way, but the upper bound stays aligned with the bucket).
+//
+// PreviousEnd is clamped to the same elapsed duration as the current
+// partial period, so the "上期 vs 本期" delta compares apples to apples.
 type WindowSpec struct {
 	Range          string // day / week / month
 	CurrentStart   time.Time
 	CurrentEnd     time.Time
 	PreviousStart  time.Time
 	PreviousEnd    time.Time
+	PeriodEnd      time.Time // calendar boundary; for sparkline upper bound
 	SparklineStart time.Time
 	SparklineGrain string // day / week / month
 	SparklineCount int    // 14 / 12 / 12
 }
 
 func (w TimeWindow) Resolve(rng string) (WindowSpec, error) {
+	// All boundaries are converted to w.Loc on the way out. The instants
+	// don't change — time.Time.Equal() / SQL parameter binding only care
+	// about the absolute moment — but printf/log output reads as local
+	// wall-clock (e.g. "2026-05-13 00:00:00 +0800 CST"), which matches
+	// the operator's mental model when debugging.
 	switch rng {
 	case "day":
+		elapsed := w.NowUTC.Sub(w.TodayStartUTC)
 		return WindowSpec{
 			Range:          "day",
-			CurrentStart:   w.TodayStartUTC,
-			CurrentEnd:     w.TodayEndUTC,
-			PreviousStart:  w.YesterdayStartUTC,
-			PreviousEnd:    w.TodayStartUTC,
-			SparklineStart: w.DayTrendStartUTC,
+			CurrentStart:   w.TodayStartUTC.In(w.Loc),
+			CurrentEnd:     w.NowUTC.In(w.Loc),
+			PreviousStart:  w.YesterdayStartUTC.In(w.Loc),
+			PreviousEnd:    clampPrevEnd(w.YesterdayStartUTC.Add(elapsed), w.TodayStartUTC).In(w.Loc),
+			PeriodEnd:      w.TodayEndUTC.In(w.Loc),
+			SparklineStart: w.DayTrendStartUTC.In(w.Loc),
 			SparklineGrain: "day",
 			SparklineCount: 14,
 		}, nil
 	case "week":
+		elapsed := w.NowUTC.Sub(w.WeekStartUTC)
 		return WindowSpec{
 			Range:          "week",
-			CurrentStart:   w.WeekStartUTC,
-			CurrentEnd:     w.NextWeekStartUTC,
-			PreviousStart:  w.LastWeekStartUTC,
-			PreviousEnd:    w.WeekStartUTC,
-			SparklineStart: w.WeekTrendStartUTC,
+			CurrentStart:   w.WeekStartUTC.In(w.Loc),
+			CurrentEnd:     w.NowUTC.In(w.Loc),
+			PreviousStart:  w.LastWeekStartUTC.In(w.Loc),
+			PreviousEnd:    clampPrevEnd(w.LastWeekStartUTC.Add(elapsed), w.WeekStartUTC).In(w.Loc),
+			PeriodEnd:      w.NextWeekStartUTC.In(w.Loc),
+			SparklineStart: w.WeekTrendStartUTC.In(w.Loc),
 			SparklineGrain: "week",
 			SparklineCount: 12,
 		}, nil
 	case "month":
+		elapsed := w.NowUTC.Sub(w.MonthStartUTC)
 		return WindowSpec{
 			Range:          "month",
-			CurrentStart:   w.MonthStartUTC,
-			CurrentEnd:     w.NextMonthStartUTC,
-			PreviousStart:  w.LastMonthStartUTC,
-			PreviousEnd:    w.MonthStartUTC,
-			SparklineStart: w.MonthTrendStartUTC,
+			CurrentStart:   w.MonthStartUTC.In(w.Loc),
+			CurrentEnd:     w.NowUTC.In(w.Loc),
+			PreviousStart:  w.LastMonthStartUTC.In(w.Loc),
+			PreviousEnd:    clampPrevEnd(w.LastMonthStartUTC.Add(elapsed), w.MonthStartUTC).In(w.Loc),
+			PeriodEnd:      w.NextMonthStartUTC.In(w.Loc),
+			SparklineStart: w.MonthTrendStartUTC.In(w.Loc),
 			SparklineGrain: "month",
 			SparklineCount: 12,
 		}, nil
 	default:
 		return WindowSpec{}, fmt.Errorf("invalid range %q: want day|week|month", rng)
 	}
+}
+
+// clampPrevEnd guards against the Feb-vs-Mar case where previousStart +
+// elapsed can overshoot currentStart (previous month has fewer days).
+func clampPrevEnd(prevEnd, currentStart time.Time) time.Time {
+	if prevEnd.After(currentStart) {
+		return currentStart
+	}
+	return prevEnd
 }
 
 // SinceStart returns the UTC instant for `since`, plus the validated form.

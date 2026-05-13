@@ -27,7 +27,7 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		return resp, err
 	}
 	tokenBuckets, err := QueryTokensSparkline(ctx, db, w, spec.SparklineGrain,
-		spec.SparklineStart, spec.CurrentEnd)
+		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		return resp, err
 	}
@@ -41,7 +41,7 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		return resp, err
 	}
 	costBuckets, err := QueryCostSparkline(ctx, db, w, spec.SparklineGrain,
-		spec.SparklineStart, spec.CurrentEnd)
+		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		return resp, err
 	}
