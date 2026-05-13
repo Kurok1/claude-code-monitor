@@ -95,8 +95,7 @@ jobs:
           mkdir -p dist
           NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
           go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
-          cp README.md CLAUDE.md config.example.yaml "dist/${NAME}/"
-          cp -R docs scripts "dist/${NAME}/"
+          cp config.example.yaml "dist/${NAME}/"
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
 
@@ -113,8 +112,7 @@ jobs:
           mkdir -p dist
           NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
           go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
-          cp README.md CLAUDE.md config.example.yaml "dist/${NAME}/"
-          cp -R docs scripts "dist/${NAME}/"
+          cp config.example.yaml "dist/${NAME}/"
           ( cd dist && /usr/bin/zip -r "${NAME}.zip" "${NAME}" )
           ( cd dist && sha256sum "${NAME}.zip" > "${NAME}.zip.sha256" )
 
