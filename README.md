@@ -42,6 +42,8 @@ go build -o bin/server ./cmd/server
 
 依赖 CGO（go-duckdb），首次构建会拉取 DuckDB 静态库。
 
+> Release 预编译二进制覆盖 linux-amd64 / linux-arm64 / darwin-arm64 / windows-amd64；**Intel Mac（darwin-amd64）请自行 `go build` 编译**（GitHub Actions 的 macos-13 runner 队列不稳定，已从 release matrix 移除）。
+
 含前端（一键打前端 + Go 嵌入产出单二进制）：
 ```bash
 ./scripts/build-all.sh

@@ -28,12 +28,11 @@ jobs:
             goarch: arm64
             ext: ""
             archive: tar.gz
-          - target: darwin-amd64
-            os: macos-13
-            goos: darwin
-            goarch: amd64
-            ext: ""
-            archive: tar.gz
+          # darwin-amd64 (Intel Macs) was dropped: macos-13 is the last
+          # Intel runner image GitHub offers, the queue depth is unreliable
+          # (jobs frequently stall waiting for a free runner), and Intel Mac
+          # share among devs has been declining since 2020. Users on Intel
+          # Macs can build from source: `go build ./cmd/server`.
           - target: darwin-arm64
             os: macos-latest
             goos: darwin
