@@ -2,8 +2,6 @@
 
 Go 实现的 Claude Code 监控服务。接收 Claude Code 通过 **OTLP gRPC** 推送的 Metrics 与 Events，落到本地 DuckDB（一指标 / 一事件 = 一张表，共 **19 张表**），便于后续做聚合分析与可视化。
 
-> 当前是 v1，只有后端 ingest + 落库；查询 API + 前端看板规划在 v2。
-
 ---
 
 ## 架构

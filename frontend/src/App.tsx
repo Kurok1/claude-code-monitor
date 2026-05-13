@@ -209,7 +209,6 @@ export default function App() {
           <a className="brand" href="#">
             <span className="brand__logo">C</span>
             <span className="brand__name">Claude Code Monitor</span>
-            <span className="brand__sub">个人 · v1.0</span>
           </a>
           <span className="spacer" />
           <span className="live-dot">
@@ -223,9 +222,6 @@ export default function App() {
             style={{ animation: refreshing ? 'spin 600ms linear' : 'none' }}
           >
             <Icon name="refresh" size={15} />
-          </button>
-          <button className="icon-btn" title="导出 CSV">
-            <Icon name="download" size={15} />
           </button>
           <button
             className="icon-btn"
@@ -498,15 +494,6 @@ export default function App() {
           </table>
         </section>
 
-        <div className="api-note">
-          <Icon name="sparkles" size={14} color="var(--accent)" />
-          <span>
-            数据接口已留空 · 编辑 <code>src/api/dashboard.ts</code> 中{' '}
-            <code>Dashboard.fetch(range)</code>，指向{' '}
-            <code>GET /api/usage?range=day|week|month</code> 即可接入真实数据。
-            字段约定见文件顶部注释。
-          </span>
-        </div>
       </main>
 
       <TweaksPanel tweaks={tweaks} setTweak={setTweak} />
