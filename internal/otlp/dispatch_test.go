@@ -46,7 +46,7 @@ func TestDispatchAllCaptured(t *testing.T) {
 	metricFiles := loadFiles(t, filepath.Join(capturedDir, "metrics"), ".pb")
 	logFiles := loadFiles(t, filepath.Join(capturedDir, "logs"), ".pb")
 	if len(metricFiles) == 0 && len(logFiles) == 0 {
-		t.Skipf("no captured files under %s; run ./scripts/run-capture.sh first", capturedDir)
+		t.Skipf("no captured files under %s; start the server with capture.enabled=true to collect samples", capturedDir)
 	}
 
 	sink := &NoopSink{}

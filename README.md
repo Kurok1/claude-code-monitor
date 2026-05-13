@@ -59,11 +59,6 @@ cp config.example.yaml config.yaml
 ./bin/server -config config.yaml
 ```
 
-或者一键脚本（同时打开 OTLP payload 采集，方便回归 / 抓样本）：
-```bash
-./scripts/run-capture.sh
-```
-
 启动后会看到：
 ```
 buffered writer ready  tables=19
@@ -253,28 +248,6 @@ event_user_prompt                          823        820          0            
 ```bash
 go tool pprof http://127.0.0.1:9100/debug/pprof/heap
 ```
-
-### 检查采集的原始 OTLP 样本
-
-```bash
-./scripts/inspect.sh -aggregate captured/        # 汇总：每种 metric / event 出现次数
-./scripts/inspect.sh captured/metrics/<file>.pb  # 单文件 summary
-./scripts/inspect.sh -format json captured/logs/<file>.pb | jq .
-```
-
-### 回放采集的样本（无需启 Claude Code）
-
-```bash
-./scripts/replay.sh captured/
-```
-
-### 一键冒烟测试
-
-```bash
-./scripts/smoke.sh
-```
-
-会在临时目录起一个空 server，发已知 OTLP 请求，SIGTERM 后 SELECT 验证 7 张表都有数据。CI 友好。
 
 ---
 

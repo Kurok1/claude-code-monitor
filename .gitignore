@@ -5,8 +5,7 @@ captured/
 *.duckdb.wal
 .DS_Store
 config.yaml
-config.capture.yaml
-/smoke
+config.dev.yaml
 
 # Frontend
 node_modules/
