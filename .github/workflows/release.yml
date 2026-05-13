@@ -55,6 +55,25 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (embed into binary)
+        shell: bash
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          # Sanity: vite writes to ../internal/web/dist; //go:embed all:dist
+          # in internal/web/web.go picks it up. If this file is missing the
+          # released binary would silently fall back to the plain-text "/"
+          # page — fail fast instead.
+          test -f ../internal/web/dist/index.html
+
       - name: Configure MinGW (windows)
         if: matrix.goos == 'windows'
         uses: msys2/setup-msys2@v2
