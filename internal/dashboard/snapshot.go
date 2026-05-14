@@ -46,7 +46,7 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		return resp, err
 	}
 
-	hit, miss, err := QueryPeriodCache(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	cacheRead, cacheCreation, err := QueryPeriodCache(ctx, db, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		return resp, err
 	}
@@ -77,9 +77,9 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		Sparkline: fillCostSparkline(costBuckets, spec, w.Loc),
 	}
 	resp.Cache = CacheBlock{
-		HitRate:    cacheHitRate(hit, miss),
-		HitTokens:  hit,
-		MissTokens: miss,
+		HitRate:        cacheHitRate(cacheRead, cacheCreation),
+		ReadTokens:     cacheRead,
+		CreationTokens: cacheCreation,
 	}
 	resp.Models = mergeModelFamilies(familyTok, familyC, familyR)
 	return resp, nil
@@ -129,12 +129,15 @@ func advanceGrain(d time.Time, grain string) time.Time {
 	return d
 }
 
-func cacheHitRate(hit, miss int64) float64 {
-	denom := hit + miss
+// cacheHitRate returns the ratio of cache reads to total cache-touched
+// tokens, or nil when no cache activity exists in the window.
+func cacheHitRate(read, creation int64) *float64 {
+	denom := read + creation
 	if denom == 0 {
-		return 0
+		return nil
 	}
-	return float64(hit) / float64(denom)
+	v := float64(read) / float64(denom)
+	return &v
 }
 
 // mergeModelFamilies outer-joins tokens/cost/requests by family, computes share,

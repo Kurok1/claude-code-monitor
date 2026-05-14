@@ -237,17 +237,48 @@ func TestQueryPeriodCache(t *testing.T) {
 	spec, _ := w.Resolve("day")
 
 	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "cacheRead", 80)
-	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "input", 20)
-	// Should be excluded:
-	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "cacheCreation", 999)
+	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "cacheCreation", 20)
+	// Should be excluded — input / output are unrelated to cache efficacy:
+	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "input", 999)
 	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "output", 999)
 
-	hit, miss, err := QueryPeriodCache(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	read, creation, err := QueryPeriodCache(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		t.Fatalf("QueryPeriodCache: %v", err)
 	}
-	if hit != 80 || miss != 20 {
-		t.Errorf("hit=%d miss=%d, want 80/20", hit, miss)
+	if read != 80 || creation != 20 {
+		t.Errorf("read=%d creation=%d, want 80/20", read, creation)
+	}
+}
+
+func TestCacheHitRate(t *testing.T) {
+	cases := []struct {
+		name             string
+		read, creation   int64
+		wantNil          bool
+		wantRateApprox   float64
+	}{
+		{name: "hit_and_creation", read: 80, creation: 20, wantRateApprox: 0.80},
+		{name: "all_reads", read: 100, creation: 0, wantRateApprox: 1.0},
+		{name: "all_creations", read: 0, creation: 100, wantRateApprox: 0.0},
+		{name: "no_cache_activity", read: 0, creation: 0, wantNil: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := cacheHitRate(c.read, c.creation)
+			if c.wantNil {
+				if got != nil {
+					t.Errorf("got %v, want nil", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("got nil, want %v", c.wantRateApprox)
+			}
+			if diff := *got - c.wantRateApprox; diff > 1e-9 || diff < -1e-9 {
+				t.Errorf("got %v, want %v", *got, c.wantRateApprox)
+			}
+		})
 	}
 }
 

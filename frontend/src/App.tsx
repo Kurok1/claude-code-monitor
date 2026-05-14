@@ -297,12 +297,19 @@ export default function App() {
           <KpiCard
             icon="database"
             label={`${rangePrefix}缓存命中率`}
-            value={Number((data.cache.hit_rate * 100).toFixed(1))}
-            unit="%"
+            value={
+              data.cache.hit_rate == null
+                ? 'N/A'
+                : Number((data.cache.hit_rate * 100).toFixed(1))
+            }
+            unit={data.cache.hit_rate == null ? undefined : '%'}
             foot={
               <div style={{ width: '100%' }}>
                 <div className="cache-meter__bar" style={{ marginTop: 2 }}>
-                  <i className="hit" style={{ width: data.cache.hit_rate * 100 + '%' }} />
+                  <i
+                    className="hit"
+                    style={{ width: (data.cache.hit_rate ?? 0) * 100 + '%' }}
+                  />
                   <i className="miss" style={{ flex: 1 }} />
                 </div>
                 <div
@@ -314,8 +321,8 @@ export default function App() {
                     color: 'var(--fg-3)',
                   }}
                 >
-                  <span>命中 {formatTokens(data.cache.hit_tokens)}</span>
-                  <span>未命中 {formatTokens(data.cache.miss_tokens)}</span>
+                  <span>命中 {formatTokens(data.cache.read_tokens)}</span>
+                  <span>创建 {formatTokens(data.cache.creation_tokens)}</span>
                 </div>
               </div>
             }

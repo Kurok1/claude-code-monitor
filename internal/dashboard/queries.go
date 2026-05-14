@@ -83,22 +83,31 @@ func QueryPeriodCost(ctx context.Context, db *sql.DB, start, end time.Time) (flo
 	return v, nil
 }
 
-// QueryPeriodCache — cache hit/miss tokens in [start, end). Hit rate is
-// computed by the caller (cacheRead / (cacheRead + input)).
-func QueryPeriodCache(ctx context.Context, db *sql.DB, start, end time.Time) (hit, miss int64, err error) {
+// QueryPeriodCache — cache read/creation tokens in [start, end).
+//
+// Hit rate is computed by the caller as
+//   cacheRead / (cacheRead + cacheCreation)
+// — the fraction of cache-touched tokens that came from a hit rather than
+// a (re)write. Plain `input` tokens are excluded from both numerator and
+// denominator because they are unrelated to caching (counting them would
+// conflate "no caching used" with "cache miss").
+//
+// When read == 0 && creation == 0 the caller treats the rate as N/A and
+// surfaces null in the API response.
+func QueryPeriodCache(ctx context.Context, db *sql.DB, start, end time.Time) (read, creation int64, err error) {
 	const q = `
 		SELECT
-		  COALESCE(SUM(CASE WHEN type='cacheRead' THEN value END), 0) AS hit_tokens,
-		  COALESCE(SUM(CASE WHEN type='input'     THEN value END), 0) AS miss_tokens
+		  COALESCE(SUM(CASE WHEN type='cacheRead'     THEN value END), 0) AS read_tokens,
+		  COALESCE(SUM(CASE WHEN type='cacheCreation' THEN value END), 0) AS creation_tokens
 		FROM metric_token_usage
 		WHERE ts >= ? AND ts < ?
-		  AND type IN ('input', 'cacheRead')
+		  AND type IN ('cacheRead', 'cacheCreation')
 	`
-	err = db.QueryRowContext(ctx, q, start, end).Scan(&hit, &miss)
+	err = db.QueryRowContext(ctx, q, start, end).Scan(&read, &creation)
 	if err != nil {
 		return 0, 0, fmt.Errorf("query period cache: %w", err)
 	}
-	return hit, miss, nil
+	return read, creation, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────

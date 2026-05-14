@@ -60,9 +60,9 @@ export interface DashboardData {
     sparkline: number[];
   };
   cache: {
-    hit_rate: number;
-    hit_tokens: number;
-    miss_tokens: number;
+    hit_rate: number | null;
+    read_tokens: number;
+    creation_tokens: number;
   };
   models: ModelBreakdown[];
   series: { points: SeriesPoint[] };
@@ -97,9 +97,9 @@ interface SnapshotWire {
     sparkline: number[];
   };
   cache: {
-    hit_rate: number;
-    hit_tokens: number;
-    miss_tokens: number;
+    hit_rate: number | null;
+    read_tokens: number;
+    creation_tokens: number;
   };
   models: Array<{
     family: ModelId;

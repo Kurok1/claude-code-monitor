@@ -31,10 +31,16 @@ type CostBlock struct {
 	Sparkline []float64 `json:"sparkline"`
 }
 
+// CacheBlock describes prompt-cache efficacy in the current window.
+//
+//   - HitRate = cacheRead / (cacheRead + cacheCreation). Null when both
+//     are zero (no caching used in this window) — frontend renders "N/A".
+//   - ReadTokens     = tokens served from cache (hits).
+//   - CreationTokens = tokens written into cache (cache writes / refreshes).
 type CacheBlock struct {
-	HitRate    float64 `json:"hit_rate"` // 0..1; cacheRead / (cacheRead + input)
-	HitTokens  int64   `json:"hit_tokens"`
-	MissTokens int64   `json:"miss_tokens"`
+	HitRate        *float64 `json:"hit_rate"`
+	ReadTokens     int64    `json:"read_tokens"`
+	CreationTokens int64    `json:"creation_tokens"`
 }
 
 type ModelBlock struct {
