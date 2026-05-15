@@ -154,6 +154,32 @@ export default function App() {
     return () => window.clearInterval(i);
   }, []);
 
+  // Auto-refresh aligned to wall-clock 5-minute marks (xx:00, xx:05, ...).
+  // Re-uses the manual refresh path by bumping refreshKey; the fetch
+  // effect above handles the actual reload. Self-scheduling setTimeout is
+  // preferred over setInterval here because each tick recomputes the gap
+  // to the next boundary — drift from suspend/resume or browser throttling
+  // self-corrects on the following tick.
+  useEffect(() => {
+    let timer: number | undefined;
+    const scheduleNext = () => {
+      const now = new Date();
+      const msSinceBoundary =
+        (now.getMinutes() % 5) * 60_000 +
+        now.getSeconds() * 1000 +
+        now.getMilliseconds();
+      const delay = 5 * 60_000 - msSinceBoundary;
+      timer = window.setTimeout(() => {
+        setRefreshKey(k => k + 1);
+        scheduleNext();
+      }, delay);
+    };
+    scheduleNext();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
   if (!data) {
     return (
       <div className="app">
