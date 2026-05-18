@@ -86,7 +86,9 @@ func QueryPeriodCost(ctx context.Context, db *sql.DB, start, end time.Time) (flo
 // QueryPeriodCache — cache read/creation tokens in [start, end).
 //
 // Hit rate is computed by the caller as
-//   cacheRead / (cacheRead + cacheCreation)
+//
+//	cacheRead / (cacheRead + cacheCreation)
+//
 // — the fraction of cache-touched tokens that came from a hit rather than
 // a (re)write. Plain `input` tokens are excluded from both numerator and
 // denominator because they are unrelated to caching (counting them would
@@ -184,105 +186,99 @@ func QueryCostSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain str
 
 // ─────────────────────────────────────────────────────────────────────
 // Model breakdown (3 sub-queries joined in Go — all-time)
+//
+// Queries return rows keyed by the raw `model` column. The dashboard layer
+// (Classifier) then folds raw names into user-facing groups. This keeps the
+// classification logic in Go where it can be configured at runtime.
 // ─────────────────────────────────────────────────────────────────────
 
-// familyCase is the canonical CASE expression. Used in every model-aware query.
-const familyCase = `
-	CASE
-	  WHEN model ILIKE '%opus%'   THEN 'opus'
-	  WHEN model ILIKE '%sonnet%' THEN 'sonnet'
-	  WHEN model ILIKE '%haiku%'  THEN 'haiku'
-	  ELSE 'other'
-	END
-`
-
-type familyTokens struct {
-	Family      string
+type modelTokens struct {
+	Model       string
 	TokensIn    int64
 	TokensOut   int64
 	CacheTokens int64
 }
 
-func QueryFamilyTokens(ctx context.Context, db *sql.DB) ([]familyTokens, error) {
-	q := `
+func QueryModelTokens(ctx context.Context, db *sql.DB) ([]modelTokens, error) {
+	const q = `
 		SELECT
-		  ` + familyCase + ` AS family,
+		  model,
 		  COALESCE(SUM(CASE WHEN type='input'     THEN value END), 0) AS tokens_in,
 		  COALESCE(SUM(CASE WHEN type='output'    THEN value END), 0) AS tokens_out,
 		  COALESCE(SUM(CASE WHEN type='cacheRead' THEN value END), 0) AS cache_tokens
 		FROM metric_token_usage
 		WHERE model IS NOT NULL
-		GROUP BY 1
+		GROUP BY model
 	`
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("query family tokens: %w", err)
+		return nil, fmt.Errorf("query model tokens: %w", err)
 	}
 	defer rows.Close()
 
-	var out []familyTokens
+	var out []modelTokens
 	for rows.Next() {
-		var r familyTokens
-		if err := rows.Scan(&r.Family, &r.TokensIn, &r.TokensOut, &r.CacheTokens); err != nil {
-			return nil, fmt.Errorf("scan family tokens: %w", err)
+		var r modelTokens
+		if err := rows.Scan(&r.Model, &r.TokensIn, &r.TokensOut, &r.CacheTokens); err != nil {
+			return nil, fmt.Errorf("scan model tokens: %w", err)
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-type familyCost struct {
-	Family string
-	Cost   float64
+type modelCost struct {
+	Model string
+	Cost  float64
 }
 
-func QueryFamilyCost(ctx context.Context, db *sql.DB) ([]familyCost, error) {
-	q := `
-		SELECT ` + familyCase + ` AS family, SUM(value) AS cost
+func QueryModelCost(ctx context.Context, db *sql.DB) ([]modelCost, error) {
+	const q = `
+		SELECT model, SUM(value) AS cost
 		FROM metric_cost_usage
 		WHERE model IS NOT NULL
-		GROUP BY 1
+		GROUP BY model
 	`
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("query family cost: %w", err)
+		return nil, fmt.Errorf("query model cost: %w", err)
 	}
 	defer rows.Close()
 
-	var out []familyCost
+	var out []modelCost
 	for rows.Next() {
-		var r familyCost
-		if err := rows.Scan(&r.Family, &r.Cost); err != nil {
-			return nil, fmt.Errorf("scan family cost: %w", err)
+		var r modelCost
+		if err := rows.Scan(&r.Model, &r.Cost); err != nil {
+			return nil, fmt.Errorf("scan model cost: %w", err)
 		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-type familyRequests struct {
-	Family   string
+type modelRequests struct {
+	Model    string
 	Requests int64
 }
 
-func QueryFamilyRequests(ctx context.Context, db *sql.DB) ([]familyRequests, error) {
-	q := `
-		SELECT ` + familyCase + ` AS family, COUNT(*) AS requests
+func QueryModelRequests(ctx context.Context, db *sql.DB) ([]modelRequests, error) {
+	const q = `
+		SELECT model, COUNT(*) AS requests
 		FROM event_api_request
 		WHERE model IS NOT NULL
-		GROUP BY 1
+		GROUP BY model
 	`
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, fmt.Errorf("query family requests: %w", err)
+		return nil, fmt.Errorf("query model requests: %w", err)
 	}
 	defer rows.Close()
 
-	var out []familyRequests
+	var out []modelRequests
 	for rows.Next() {
-		var r familyRequests
-		if err := rows.Scan(&r.Family, &r.Requests); err != nil {
-			return nil, fmt.Errorf("scan family requests: %w", err)
+		var r modelRequests
+		if err := rows.Scan(&r.Model, &r.Requests); err != nil {
+			return nil, fmt.Errorf("scan model requests: %w", err)
 		}
 		out = append(out, r)
 	}
@@ -295,23 +291,25 @@ func QueryFamilyRequests(ctx context.Context, db *sql.DB) ([]familyRequests, err
 
 type trendRow struct {
 	Bucket time.Time
-	Family string
+	Model  string
 	Tokens int64
 }
 
 // QueryTrends — stacked-area data for /api/usage/trends.
+// Returns one row per (bucket, raw model); the dashboard layer folds rows
+// into groups via the Classifier.
 func QueryTrends(ctx context.Context, db *sql.DB, w TimeWindow, grain string, windowStart time.Time) ([]trendRow, error) {
 	q := fmt.Sprintf(`
 		SELECT
 		  CAST(%s AS DATE) AS bucket_sh,
-		  %s AS family,
+		  model,
 		  SUM(value) AS tokens
 		FROM metric_token_usage
 		WHERE ts >= ?
 		  AND model IS NOT NULL
 		GROUP BY 1, 2
 		ORDER BY 1
-	`, localGrainExpr(w, "ts", grain), familyCase)
+	`, localGrainExpr(w, "ts", grain))
 
 	rows, err := db.QueryContext(ctx, q, windowStart)
 	if err != nil {
@@ -322,7 +320,7 @@ func QueryTrends(ctx context.Context, db *sql.DB, w TimeWindow, grain string, wi
 	var out []trendRow
 	for rows.Next() {
 		var r trendRow
-		if err := rows.Scan(&r.Bucket, &r.Family, &r.Tokens); err != nil {
+		if err := rows.Scan(&r.Bucket, &r.Model, &r.Tokens); err != nil {
 			return nil, fmt.Errorf("scan trend row: %w", err)
 		}
 		out = append(out, r)

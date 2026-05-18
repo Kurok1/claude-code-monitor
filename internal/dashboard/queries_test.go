@@ -253,10 +253,10 @@ func TestQueryPeriodCache(t *testing.T) {
 
 func TestCacheHitRate(t *testing.T) {
 	cases := []struct {
-		name             string
-		read, creation   int64
-		wantNil          bool
-		wantRateApprox   float64
+		name           string
+		read, creation int64
+		wantNil        bool
+		wantRateApprox float64
 	}{
 		{name: "hit_and_creation", read: 80, creation: 20, wantRateApprox: 0.80},
 		{name: "all_reads", read: 100, creation: 0, wantRateApprox: 1.0},
@@ -282,34 +282,34 @@ func TestCacheHitRate(t *testing.T) {
 	}
 }
 
-func TestQueryFamilyTokens_AllFamilies(t *testing.T) {
+func TestQueryModelTokens_RawModels(t *testing.T) {
 	db, w, _ := testDB(t)
 	ts := w.TodayStartUTC.Add(time.Hour)
 
 	insertTokenUsage(t, db, ts, "claude-opus-4-1-20250805", "input", 10)
 	insertTokenUsage(t, db, ts, "claude-sonnet-4-5", "input", 20)
 	insertTokenUsage(t, db, ts, "claude-haiku-4-5", "output", 30)
-	insertTokenUsage(t, db, ts, "claude-mystery-model", "cacheRead", 5)
+	insertTokenUsage(t, db, ts, "deepseek-v3", "cacheRead", 5)
 
-	got, err := QueryFamilyTokens(context.Background(), db)
+	got, err := QueryModelTokens(context.Background(), db)
 	if err != nil {
-		t.Fatalf("QueryFamilyTokens: %v", err)
+		t.Fatalf("QueryModelTokens: %v", err)
 	}
-	byFamily := map[string]familyTokens{}
+	byModel := map[string]modelTokens{}
 	for _, r := range got {
-		byFamily[r.Family] = r
+		byModel[r.Model] = r
 	}
-	if byFamily["opus"].TokensIn != 10 {
-		t.Errorf("opus.in = %d, want 10", byFamily["opus"].TokensIn)
+	if byModel["claude-opus-4-1-20250805"].TokensIn != 10 {
+		t.Errorf("opus row = %+v", byModel["claude-opus-4-1-20250805"])
 	}
-	if byFamily["sonnet"].TokensIn != 20 {
-		t.Errorf("sonnet.in = %d, want 20", byFamily["sonnet"].TokensIn)
+	if byModel["claude-sonnet-4-5"].TokensIn != 20 {
+		t.Errorf("sonnet row = %+v", byModel["claude-sonnet-4-5"])
 	}
-	if byFamily["haiku"].TokensOut != 30 {
-		t.Errorf("haiku.out = %d, want 30", byFamily["haiku"].TokensOut)
+	if byModel["claude-haiku-4-5"].TokensOut != 30 {
+		t.Errorf("haiku row = %+v", byModel["claude-haiku-4-5"])
 	}
-	if byFamily["other"].CacheTokens != 5 {
-		t.Errorf("other.cache = %d, want 5", byFamily["other"].CacheTokens)
+	if byModel["deepseek-v3"].CacheTokens != 5 {
+		t.Errorf("deepseek row = %+v", byModel["deepseek-v3"])
 	}
 }
 
@@ -377,7 +377,7 @@ func TestQuerySkillsRanking(t *testing.T) {
 	}
 }
 
-func TestQueryFamilyCostAndRequests(t *testing.T) {
+func TestQueryModelCostAndRequests(t *testing.T) {
 	db, w, _ := testDB(t)
 	ts := w.TodayStartUTC.Add(time.Hour)
 
@@ -389,21 +389,64 @@ func TestQueryFamilyCostAndRequests(t *testing.T) {
 	insertApiRequest(t, db, ts, "claude-opus-4-1")
 	insertApiRequest(t, db, ts, "claude-haiku-4-5")
 
-	costs, _ := QueryFamilyCost(context.Background(), db)
-	byF := map[string]float64{}
+	costs, _ := QueryModelCost(context.Background(), db)
+	byModel := map[string]float64{}
 	for _, c := range costs {
-		byF[c.Family] = c.Cost
+		byModel[c.Model] = c.Cost
 	}
-	if byF["opus"] != 4.0 || byF["sonnet"] != 1.0 {
-		t.Errorf("costs = %v", byF)
+	if byModel["claude-opus-4-1"] != 4.0 || byModel["claude-sonnet-4-5"] != 1.0 {
+		t.Errorf("costs = %v", byModel)
 	}
 
-	reqs, _ := QueryFamilyRequests(context.Background(), db)
+	reqs, _ := QueryModelRequests(context.Background(), db)
 	byR := map[string]int64{}
 	for _, r := range reqs {
-		byR[r.Family] = r.Requests
+		byR[r.Model] = r.Requests
 	}
-	if byR["opus"] != 2 || byR["haiku"] != 1 {
+	if byR["claude-opus-4-1"] != 2 || byR["claude-haiku-4-5"] != 1 {
 		t.Errorf("requests = %v", byR)
+	}
+}
+
+// mergeModelGroups should fold raw models into classifier groups, sum
+// across the snapshots/`[1m]` variants, and emit rows ordered by total
+// tokens descending.
+func TestMergeModelGroups_FoldsClaudeVariants(t *testing.T) {
+	c, err := NewClassifier(nil)
+	if err != nil {
+		t.Fatalf("NewClassifier: %v", err)
+	}
+	tok := []modelTokens{
+		{Model: "claude-opus-4-7", TokensIn: 100, TokensOut: 50},
+		{Model: "claude-opus-4-7[1m]", TokensIn: 30, TokensOut: 20},
+		{Model: "claude-haiku-4-5-20251001", CacheTokens: 5},
+		{Model: "deepseek-v3", TokensIn: 7},
+	}
+	costs := []modelCost{
+		{Model: "claude-opus-4-7", Cost: 1.5},
+		{Model: "claude-opus-4-7[1m]", Cost: 0.5},
+	}
+	reqs := []modelRequests{
+		{Model: "claude-opus-4-7", Requests: 3},
+		{Model: "claude-opus-4-7[1m]", Requests: 4},
+		{Model: "deepseek-v3", Requests: 1},
+	}
+
+	got := mergeModelGroups(c, tok, costs, reqs)
+	if len(got) != 3 {
+		t.Fatalf("len(groups) = %d, want 3: %+v", len(got), got)
+	}
+	// Order: opus-4.7 (200 tok) > deepseek-v3 (7 tok) > haiku-4.5 (5 tok)
+	if got[0].Group != "opus-4.7" || got[0].Requests != 7 || got[0].Cost != 2.0 {
+		t.Errorf("group[0] = %+v, want opus-4.7 r=7 cost=2.0", got[0])
+	}
+	if got[0].TokensIn != 130 || got[0].TokensOut != 70 {
+		t.Errorf("group[0] tokens = %+v, want in=130 out=70", got[0])
+	}
+	if got[1].Group != "deepseek-v3" {
+		t.Errorf("group[1] = %+v, want deepseek-v3", got[1])
+	}
+	if got[2].Group != "haiku-4.5" || got[2].CacheTokens != 5 {
+		t.Errorf("group[2] = %+v", got[2])
 	}
 }

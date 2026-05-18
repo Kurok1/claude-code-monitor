@@ -5,12 +5,8 @@ import { StackedAreaChart } from './components/charts/StackedAreaChart';
 import type { ChartSeries } from './components/charts/StackedAreaChart';
 import { DonutChart } from './components/charts/DonutChart';
 import { TweaksPanel, useTweaks } from './components/TweaksPanel';
-import { Dashboard, MODELS } from './api/dashboard';
-import type { DashboardData, Range, Since, TrendFamilyId } from './api/dashboard';
-
-// Trends chart only stacks the three core families — 'other' is filtered
-// out per backend (low-contrast in stacked area).
-const TREND_FAMILIES = MODELS.filter(m => m.id !== 'other');
+import { Dashboard } from './api/dashboard';
+import type { DashboardData, Range, Since } from './api/dashboard';
 import { formatCurrency, formatPct, formatTokens } from './lib/format';
 
 function useAnimated(target: number, duration = 700): number {
@@ -119,11 +115,9 @@ export default function App() {
   const [range, setRange] = useState<Range>('day');
   const [since, setSince] = useState<Since>('7d');
   const [data, setData] = useState<DashboardData | null>(null);
-  const [seriesOn, setSeriesOn] = useState<Record<TrendFamilyId, boolean>>({
-    opus: true,
-    sonnet: true,
-    haiku: true,
-  });
+  // seriesOn keys are model group ids (e.g. "opus-4.7", "deepseek-v3").
+  // Missing entries default to enabled — newly seen groups light up on first load.
+  const [seriesOn, setSeriesOn] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(new Date());
   const [refreshKey, setRefreshKey] = useState(0);
@@ -190,16 +184,17 @@ export default function App() {
     );
   }
 
-  const chartSeries: ChartSeries[] = TREND_FAMILIES.map(m => ({
-    id: m.id as TrendFamilyId,
+  const trendGroups = data.series.groups;
+  const chartSeries: ChartSeries[] = trendGroups.map(m => ({
+    id: m.id,
     label: m.label,
     color: m.color,
-    on: seriesOn[m.id as TrendFamilyId],
+    on: seriesOn[m.id] !== false, // undefined → on
   }));
 
-  const seriesTotals = TREND_FAMILIES.map(m => ({
+  const seriesTotals = trendGroups.map(m => ({
     ...m,
-    total: data.series.points.reduce((s, p) => s + p[m.id as TrendFamilyId], 0),
+    total: data.series.points.reduce((s, p) => s + (p.values[m.id] ?? 0), 0),
   }));
 
   const totalToolUses = data.tools.reduce((s, x) => s + x.count, 0);
@@ -367,15 +362,16 @@ export default function App() {
           </div>
 
           <div className="trends__legend">
-            {TREND_FAMILIES.map(m => {
-              const id = m.id as TrendFamilyId;
-              const total = seriesTotals.find(s => s.id === id)!.total;
+            {trendGroups.map(m => {
+              const id = m.id;
+              const total = seriesTotals.find(s => s.id === id)?.total ?? 0;
+              const on = seriesOn[id] !== false;
               return (
                 <button
                   key={id}
                   className="legend-chip"
-                  data-on={seriesOn[id]}
-                  onClick={() => setSeriesOn(s => ({ ...s, [id]: !s[id] }))}
+                  data-on={on}
+                  onClick={() => setSeriesOn(s => ({ ...s, [id]: !on }))}
                 >
                   <span className="legend-chip__dot" style={{ background: m.color }} />
                   <span>{m.label}</span>

@@ -3,12 +3,13 @@ package dashboard
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"time"
 )
 
 // BuildSnapshot assembles the snapshot response for the given range.
 // Queries are sequential — DuckDB MaxOpenConns=1 makes parallelism pointless.
-func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (SnapshotResponse, error) {
+func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string) (SnapshotResponse, error) {
 	var resp SnapshotResponse
 	resp.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
@@ -51,15 +52,15 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		return resp, err
 	}
 
-	familyTok, err := QueryFamilyTokens(ctx, db)
+	modelTok, err := QueryModelTokens(ctx, db)
 	if err != nil {
 		return resp, err
 	}
-	familyC, err := QueryFamilyCost(ctx, db)
+	modelC, err := QueryModelCost(ctx, db)
 	if err != nil {
 		return resp, err
 	}
-	familyR, err := QueryFamilyRequests(ctx, db)
+	modelR, err := QueryModelRequests(ctx, db)
 	if err != nil {
 		return resp, err
 	}
@@ -81,7 +82,7 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (S
 		ReadTokens:     cacheRead,
 		CreationTokens: cacheCreation,
 	}
-	resp.Models = mergeModelFamilies(familyTok, familyC, familyR)
+	resp.Models = mergeModelGroups(c, modelTok, modelC, modelR)
 	return resp, nil
 }
 
@@ -140,34 +141,47 @@ func cacheHitRate(read, creation int64) *float64 {
 	return &v
 }
 
-// mergeModelFamilies outer-joins tokens/cost/requests by family, computes share,
-// drops empty families. Stable order: opus, sonnet, haiku, other.
-func mergeModelFamilies(tok []familyTokens, costs []familyCost, reqs []familyRequests) []ModelBlock {
+// mergeModelGroups outer-joins the three per-model series by classifier
+// group, computes share, drops empty groups, and orders by total tokens
+// descending (busiest first). Ties break alphabetically for stable output.
+func mergeModelGroups(c *Classifier, tok []modelTokens, costs []modelCost, reqs []modelRequests) []ModelBlock {
 	type acc struct {
 		tokensIn, tokensOut, cacheTokens int64
 		cost                             float64
 		requests                         int64
 	}
 	by := map[string]*acc{}
-	get := func(f string) *acc {
-		a, ok := by[f]
+	get := func(g string) *acc {
+		a, ok := by[g]
 		if !ok {
 			a = &acc{}
-			by[f] = a
+			by[g] = a
 		}
 		return a
 	}
 	for _, r := range tok {
-		a := get(r.Family)
-		a.tokensIn = r.TokensIn
-		a.tokensOut = r.TokensOut
-		a.cacheTokens = r.CacheTokens
+		g := c.Classify(r.Model)
+		if g == "" {
+			continue
+		}
+		a := get(g)
+		a.tokensIn += r.TokensIn
+		a.tokensOut += r.TokensOut
+		a.cacheTokens += r.CacheTokens
 	}
 	for _, r := range costs {
-		get(r.Family).cost = r.Cost
+		g := c.Classify(r.Model)
+		if g == "" {
+			continue
+		}
+		get(g).cost += r.Cost
 	}
 	for _, r := range reqs {
-		get(r.Family).requests = r.Requests
+		g := c.Classify(r.Model)
+		if g == "" {
+			continue
+		}
+		get(g).requests += r.Requests
 	}
 
 	var total int64
@@ -175,13 +189,8 @@ func mergeModelFamilies(tok []familyTokens, costs []familyCost, reqs []familyReq
 		total += a.tokensIn + a.tokensOut + a.cacheTokens
 	}
 
-	order := []string{FamilyOpus, FamilySonnet, FamilyHaiku, FamilyOther}
-	out := make([]ModelBlock, 0, len(order))
-	for _, f := range order {
-		a := by[f]
-		if a == nil {
-			continue
-		}
+	out := make([]ModelBlock, 0, len(by))
+	for g, a := range by {
 		sum := a.tokensIn + a.tokensOut + a.cacheTokens
 		if sum == 0 && a.cost == 0 && a.requests == 0 {
 			continue
@@ -191,7 +200,7 @@ func mergeModelFamilies(tok []familyTokens, costs []familyCost, reqs []familyReq
 			share = float64(sum) / float64(total)
 		}
 		out = append(out, ModelBlock{
-			Family:      f,
+			Group:       g,
 			Requests:    a.requests,
 			TokensIn:    a.tokensIn,
 			TokensOut:   a.tokensOut,
@@ -200,6 +209,13 @@ func mergeModelFamilies(tok []familyTokens, costs []familyCost, reqs []familyReq
 			Share:       share,
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		si := out[i].TokensIn + out[i].TokensOut + out[i].CacheTokens
+		sj := out[j].TokensIn + out[j].TokensOut + out[j].CacheTokens
+		if si != sj {
+			return si > sj
+		}
+		return out[i].Group < out[j].Group
+	})
 	return out
 }
-

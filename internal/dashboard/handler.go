@@ -14,16 +14,24 @@ import (
 // Handler exposes /api/usage/{snapshot,trends,rankings}.
 // All endpoints serve JSON and short-cache via `Cache-Control: private, max-age=30`.
 type Handler struct {
-	db  *sql.DB
-	cfg config.DashboardConfig
-	log *slog.Logger
+	db         *sql.DB
+	cfg        config.DashboardConfig
+	classifier *Classifier
+	log        *slog.Logger
 }
 
-func NewHandler(db *sql.DB, cfg config.DashboardConfig, log *slog.Logger) *Handler {
+// NewHandler compiles the model-group classifier from cfg. The patterns
+// were already validated at config.Load, so an error here implies an
+// internal mismatch between validation and compilation paths.
+func NewHandler(db *sql.DB, cfg config.DashboardConfig, log *slog.Logger) (*Handler, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{db: db, cfg: cfg, log: log}
+	c, err := NewClassifier(cfg.ModelGroups)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{db: db, cfg: cfg, classifier: c, log: log}, nil
 }
 
 // ServeHTTP routes by path. Only GET is allowed.
@@ -55,7 +63,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildSnapshot(r.Context(), h.db, tw, rng)
+	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng)
 	if err != nil {
 		if isUserError(err) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -79,7 +87,7 @@ func (h *Handler) handleTrends(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildTrends(r.Context(), h.db, tw, rng)
+	resp, err := BuildTrends(r.Context(), h.db, h.classifier, tw, rng)
 	if err != nil {
 		// trendsParams returns a 400-class error for unknown range values;
 		// query errors are 500.

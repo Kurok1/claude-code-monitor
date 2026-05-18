@@ -4,12 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 )
 
-// BuildTrends runs the trends query and pivots the rows into the response shape.
-// Bucket order matches the design: day → 14 buckets, week → 12 buckets, month → 12 buckets.
-func BuildTrends(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (TrendsResponse, error) {
+// BuildTrends runs the trends query and pivots rows into the response shape.
+// Bucket count matches the design: day → 14, week → 12, month → 12.
+//
+// Groups are derived by the Classifier; the legend order is by total tokens
+// across the window (descending), tie-broken alphabetically. All groups are
+// included — no "other" filter — so third-party models render alongside
+// Claude family buckets.
+func BuildTrends(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string) (TrendsResponse, error) {
 	grain, start, count, err := trendsParams(w, rng)
 	if err != nil {
 		return TrendsResponse{}, err
@@ -20,36 +26,53 @@ func BuildTrends(ctx context.Context, db *sql.DB, w TimeWindow, rng string) (Tre
 		return TrendsResponse{}, err
 	}
 
-	// Index rows by (bucket, family) → tokens. The `other` family is filtered
-	// here per the design decision (low-contrast in stacked area).
 	type key struct {
 		bucket time.Time
-		family string
+		group  string
 	}
-	idx := map[key]int64{}
+	cell := map[key]int64{}
+	groupTotal := map[string]int64{}
 	for _, r := range rows {
-		if r.Family == FamilyOther {
+		g := c.Classify(r.Model)
+		if g == "" {
 			continue
 		}
-		idx[key{bucket: r.Bucket.UTC(), family: r.Family}] = r.Tokens
+		k := key{bucket: r.Bucket.UTC(), group: g}
+		cell[k] += r.Tokens
+		groupTotal[g] += r.Tokens
 	}
+
+	groups := make([]string, 0, len(groupTotal))
+	for g := range groupTotal {
+		groups = append(groups, g)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groupTotal[groups[i]] != groupTotal[groups[j]] {
+			return groupTotal[groups[i]] > groupTotal[groups[j]]
+		}
+		return groups[i] < groups[j]
+	})
 
 	points := make([]TrendsPoint, 0, count)
 	d := start.In(w.Loc)
 	for i := 0; i < count; i++ {
 		bucketUTC := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC) // DuckDB DATE
 		date, label := formatBucket(d, grain)
+		values := make(map[string]int64, len(groups))
+		for _, g := range groups {
+			if v, ok := cell[key{bucketUTC, g}]; ok {
+				values[g] = v
+			}
+		}
 		points = append(points, TrendsPoint{
 			Date:   date,
 			Label:  label,
-			Opus:   idx[key{bucketUTC, FamilyOpus}],
-			Sonnet: idx[key{bucketUTC, FamilySonnet}],
-			Haiku:  idx[key{bucketUTC, FamilyHaiku}],
+			Values: values,
 		})
 		d = advance(d, grain)
 	}
 
-	return TrendsResponse{Range: rng, Points: points}, nil
+	return TrendsResponse{Range: rng, Groups: groups, Points: points}, nil
 }
 
 func trendsParams(w TimeWindow, rng string) (grain string, start time.Time, count int, err error) {

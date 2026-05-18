@@ -43,8 +43,11 @@ type CacheBlock struct {
 	CreationTokens int64    `json:"creation_tokens"`
 }
 
+// ModelBlock is one row of the breakdown table, keyed by the classifier
+// group (e.g. "opus-4.7", "sonnet-4.6", "deepseek-v3"). Order in the
+// response is by total tokens descending so the busiest group sorts first.
 type ModelBlock struct {
-	Family      string  `json:"family"`
+	Group       string  `json:"group"`
 	Requests    int64   `json:"requests"`
 	TokensIn    int64   `json:"tokens_in"`
 	TokensOut   int64   `json:"tokens_out"`
@@ -54,17 +57,21 @@ type ModelBlock struct {
 }
 
 // TrendsResponse → GET /api/usage/trends?range=
+//
+// `Groups` enumerates the legend order (descending by total tokens across
+// the window). `Points[i].Values[g]` is the bucket value for group `g`;
+// groups absent from a bucket are simply missing from the map (frontend
+// treats them as zero).
 type TrendsResponse struct {
 	Range  string        `json:"range"`
+	Groups []string      `json:"groups"`
 	Points []TrendsPoint `json:"points"`
 }
 
 type TrendsPoint struct {
-	Date   string `json:"date"`
-	Label  string `json:"label"`
-	Opus   int64  `json:"opus"`
-	Sonnet int64  `json:"sonnet"`
-	Haiku  int64  `json:"haiku"`
+	Date   string           `json:"date"`
+	Label  string           `json:"label"`
+	Values map[string]int64 `json:"values"`
 }
 
 // RankingsResponse → GET /api/usage/rankings?since=
@@ -83,11 +90,3 @@ type SkillRank struct {
 	Name        string `json:"name"`
 	Activations int64  `json:"activations"`
 }
-
-// Family constants — keep in sync with the SQL CASE expressions.
-const (
-	FamilyOpus   = "opus"
-	FamilySonnet = "sonnet"
-	FamilyHaiku  = "haiku"
-	FamilyOther  = "other"
-)

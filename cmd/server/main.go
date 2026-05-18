@@ -93,7 +93,12 @@ func run() error {
 	} else {
 		slog.Warn("web UI not mounted", "err", err)
 	}
-	statsSrv.SetAPIHandler(dashboard.NewHandler(db.SQL, cfg.Dashboard, slog.Default()))
+	dashHandler, err := dashboard.NewHandler(db.SQL, cfg.Dashboard, slog.Default())
+	if err != nil {
+		_ = writer.Stop()
+		return fmt.Errorf("init dashboard handler: %w", err)
+	}
+	statsSrv.SetAPIHandler(dashHandler)
 	if err := statsSrv.Start(); err != nil {
 		_ = writer.Stop()
 		return fmt.Errorf("init stats server: %w", err)

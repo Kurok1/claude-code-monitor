@@ -22,6 +22,17 @@ dashboard:
     tools: 10                  # 工具排名 Top N
     skills: 10                 # Skill 排名 Top N
   timezone: "Asia/Shanghai"    # 业务时区，全部时间窗按此切分
+  # model_groups: 自定义聚合规则。按顺序匹配,首个命中生效;未命中时若符合
+  # claude-(opus|sonnet|haiku)-X-Y 模式,内置规则会输出 family-X.Y;否则保留原名。
+  # `group` 可用 $1/$2 反向引用正则捕获组。
+  # 示例:
+  # model_groups:
+  #   - pattern: '(?i)^deepseek-.*'           # 把所有 deepseek 变体合并成单一组
+  #     group:   'deepseek'
+  #   - pattern: '(?i)^gpt-(\d+)\..*'         # gpt-4o → gpt-4
+  #     group:   'gpt-$1'
+  #   - pattern: '(?i)^claude-opus-.*'        # 覆盖内置:全部 opus 合并(不分版本)
+  #     group:   'opus'
 
 logging:
   level: "info"                # debug / info / warn / error

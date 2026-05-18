@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -45,11 +46,26 @@ type StatsConfig struct {
 type DashboardConfig struct {
 	TopN     TopNConfig `yaml:"top_n"`
 	Timezone string     `yaml:"timezone"` // IANA name, e.g. "Asia/Shanghai"
+
+	// ModelGroups configures how raw model names are bucketed for the dashboard
+	// breakdown / trends. Rules are tried in order; first match wins. If nothing
+	// matches and the name fits the built-in Claude pattern, the classifier
+	// derives `<family>-<major>.<minor>` (e.g. claude-opus-4-7[1m] → opus-4.7).
+	// Otherwise the raw model name is kept verbatim.
+	ModelGroups []ModelGroupRule `yaml:"model_groups"`
 }
 
 type TopNConfig struct {
 	Tools  int `yaml:"tools"`
 	Skills int `yaml:"skills"`
+}
+
+// ModelGroupRule is one user-defined classification rule. `Pattern` is a
+// Go regexp; `Group` is the resulting label and supports `$1`/`$N` back
+// references via regexp.Regexp.ExpandString.
+type ModelGroupRule struct {
+	Pattern string `yaml:"pattern"`
+	Group   string `yaml:"group"`
 }
 
 type LoggingConfig struct {
@@ -169,6 +185,17 @@ func validate(cfg *Config) error {
 	case "json", "text":
 	default:
 		return fmt.Errorf("logging.format must be json or text, got %q", cfg.Logging.Format)
+	}
+	for i, rule := range cfg.Dashboard.ModelGroups {
+		if rule.Pattern == "" {
+			return fmt.Errorf("dashboard.model_groups[%d].pattern is required", i)
+		}
+		if rule.Group == "" {
+			return fmt.Errorf("dashboard.model_groups[%d].group is required", i)
+		}
+		if _, err := regexp.Compile(rule.Pattern); err != nil {
+			return fmt.Errorf("dashboard.model_groups[%d].pattern %q: %w", i, rule.Pattern, err)
+		}
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SeriesPoint, TrendFamilyId } from '../../api/dashboard';
+import type { SeriesPoint } from '../../api/dashboard';
 import { formatTokens } from '../../lib/format';
 
 export interface ChartSeries {
-  id: TrendFamilyId;
+  id: string;
   label: string;
   color: string;
   on: boolean;
@@ -17,7 +17,7 @@ interface Props {
 }
 
 interface Stop {
-  id: TrendFamilyId;
+  id: string;
   start: number;
   end: number;
   color: string;
@@ -32,6 +32,12 @@ function niceCeil(v: number): number {
   else if (m <= 5) nice = 5;
   else nice = 10;
   return nice * pow;
+}
+
+// Safe SVG `<defs>` id from a group key — group strings may contain `.`,
+// `[`, `]`, `/` which break URL-fragment refs like `url(#grad-opus-4.7)`.
+function safeId(s: string): string {
+  return s.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 export function StackedAreaChart({
@@ -65,7 +71,7 @@ export function StackedAreaChart({
     let acc = 0;
     const stops: Stop[] = active.map(s => {
       const start = acc;
-      const v = p[s.id] || 0;
+      const v = p.values[s.id] ?? 0;
       acc += v;
       return { id: s.id, start, end: acc, color: s.color };
     });
@@ -79,7 +85,7 @@ export function StackedAreaChart({
   const xAt = (i: number) => padding.left + i * stepX;
   const yAt = (v: number) => padding.top + innerH - (v / yMax) * innerH;
 
-  function areaPath(seriesId: TrendFamilyId): string {
+  function areaPath(seriesId: string): string {
     const top = stack.map((s, i) => {
       const stop = s.stops.find(x => x.id === seriesId);
       return [xAt(i), yAt(stop ? stop.end : 0)] as [number, number];
@@ -99,7 +105,7 @@ export function StackedAreaChart({
     );
   }
 
-  function linePath(seriesId: TrendFamilyId): string {
+  function linePath(seriesId: string): string {
     const top = stack.map((s, i) => {
       const stop = s.stops.find(x => x.id === seriesId);
       return [xAt(i), yAt(stop ? stop.end : 0)] as [number, number];
@@ -129,7 +135,14 @@ export function StackedAreaChart({
       <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
         <defs>
           {active.map(s => (
-            <linearGradient key={s.id} id={`grad-${s.id}`} x1="0" x2="0" y1="0" y2="1">
+            <linearGradient
+              key={s.id}
+              id={`grad-${safeId(s.id)}`}
+              x1="0"
+              x2="0"
+              y1="0"
+              y2="1"
+            >
               <stop offset="0%" stopColor={s.color} stopOpacity="0.55" />
               <stop offset="100%" stopColor={s.color} stopOpacity="0.05" />
             </linearGradient>
@@ -151,7 +164,7 @@ export function StackedAreaChart({
         </g>
 
         {active.map(s => (
-          <path key={s.id + '-a'} d={areaPath(s.id)} fill={`url(#grad-${s.id})`} />
+          <path key={s.id + '-a'} d={areaPath(s.id)} fill={`url(#grad-${safeId(s.id)})`} />
         ))}
 
         {active.map(s => (
