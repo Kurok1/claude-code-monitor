@@ -355,7 +355,7 @@ export default function App() {
             <div>
               <h3>各模型 Token 用量趋势</h3>
               <div className="card-sub">
-                堆叠区域 ·{' '}
+                趋势对比 ·{' '}
                 {range === 'day' ? '近 14 天' : range === 'week' ? '近 12 周' : '近 12 个月'}
               </div>
             </div>

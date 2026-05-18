@@ -67,18 +67,23 @@ export function StackedAreaChart({
 
   const active = series.filter(s => s.on);
 
+  // Per-series areas plotted independently from the baseline (NOT stacked).
+  // Real stacking made small groups visually impossible to read when peers
+  // span very different scales (e.g. opus 80M vs haiku 113K — the haiku
+  // line drew at opus+haiku ≈ 80M and coincided with opus).
+  //
+  // `total` (sum across active groups) is kept for the tooltip.
   const stack = points.map(p => {
-    let acc = 0;
+    let sum = 0;
     const stops: Stop[] = active.map(s => {
-      const start = acc;
       const v = p.values[s.id] ?? 0;
-      acc += v;
-      return { id: s.id, start, end: acc, color: s.color };
+      sum += v;
+      return { id: s.id, start: 0, end: v, color: s.color };
     });
-    return { ...p, stops, total: acc };
+    return { ...p, stops, total: sum };
   });
 
-  const maxY = Math.max(1, ...stack.map(s => s.total));
+  const maxY = Math.max(1, ...stack.flatMap(s => s.stops.map(x => x.end)));
   const yMax = niceCeil(maxY * 1.08);
 
   const stepX = points.length > 1 ? innerW / (points.length - 1) : innerW;
