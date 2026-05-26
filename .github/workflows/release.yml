@@ -137,6 +137,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          # Filter to binary build artifacts only. Without a pattern, this
+          # step also pulls the docker-digests-* artifacts (0-byte hex-named
+          # files used by the docker-manifest job) and their unzip fails the
+          # whole release step.
+          pattern: '{linux,darwin,windows}-*'
           merge-multiple: true
 
       - name: Aggregate checksums
