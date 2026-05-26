@@ -1,0 +1,28 @@
+server:
+  grpc_listen: "0.0.0.0:4317"
+
+storage:
+  duckdb_path: "/data/monitor.duckdb"
+
+ingest:
+  batch_size: 500
+  flush_interval: "5s"
+  buffer_hard_limit: 50000
+
+capture:
+  enabled: false
+  dir: "/data/captured"
+
+stats:
+  listen: "0.0.0.0:9100"
+  enable_pprof: false
+
+dashboard:
+  top_n:
+    tools: 10
+    skills: 10
+  timezone: "Asia/Shanghai"
+
+logging:
+  level: "info"
+  format: "json"

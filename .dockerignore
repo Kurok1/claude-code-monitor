@@ -1,0 +1,30 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile
+README.md
+docs/
+
+# Build outputs
+bin/
+data/
+captured/
+
+# Local DuckDB files
+*.duckdb
+*.duckdb.wal
+
+# Local-only configs (must not bake into image)
+config.yaml
+config.dev.yaml
+
+# Frontend & embedded SPA artifacts — rebuilt inside the image
+frontend/node_modules/
+frontend/dist/
+internal/web/dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.log
