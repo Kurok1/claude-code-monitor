@@ -68,6 +68,11 @@ export interface DashboardData {
     read_tokens: number;
     creation_tokens: number;
   };
+  requests: {
+    total: number;
+    prev_total: number;
+    sparkline: number[];
+  };
   models: ModelBreakdown[];
   series: {
     groups: ModelMeta[]; // legend order from API + UI metadata
@@ -165,6 +170,11 @@ interface SnapshotWire {
     read_tokens: number;
     creation_tokens: number;
   };
+  requests: {
+    total: number;
+    prev_total: number;
+    sparkline: number[];
+  };
   models: Array<{
     group: string;
     requests: number;
@@ -223,6 +233,7 @@ function adapt(snap: SnapshotWire, trends: TrendsWire, rankings: RankingsWire): 
     tokens: snap.tokens,
     cost: snap.cost,
     cache: snap.cache,
+    requests: snap.requests,
     models: snap.models.map(m => ({
       ...metaForGroup(m.group),
       requests: m.requests,

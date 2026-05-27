@@ -28,7 +28,7 @@ function useAnimated(target: number, duration = 700): number {
 }
 
 interface KpiCardProps {
-  icon: 'coins' | 'dollar' | 'database';
+  icon: 'coins' | 'dollar' | 'database' | 'activity';
   label: string;
   value: number | string;
   unit?: string;
@@ -222,6 +222,7 @@ export default function App() {
   };
   const tokenDelta = pctDelta(data.tokens.total, data.tokens.prev_total);
   const costDelta = pctDelta(data.cost.total, data.cost.prev_total);
+  const requestsDelta = pctDelta(data.requests.total, data.requests.prev_total);
 
   return (
     <div className="app">
@@ -347,6 +348,20 @@ export default function App() {
                 </div>
               </div>
             }
+          />
+          <KpiCard
+            icon="activity"
+            label={`${rangePrefix}请求次数`}
+            value={data.requests.total}
+            delta={requestsDelta}
+            foot={
+              <>
+                {prevLabel} <strong>{data.requests.prev_total.toLocaleString()}</strong> 次
+              </>
+            }
+            sparkValues={data.requests.sparkline}
+            sparkColor="var(--accent)"
+            animate
           />
         </div>
 

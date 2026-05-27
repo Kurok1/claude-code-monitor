@@ -52,6 +52,20 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 		return resp, err
 	}
 
+	curRequests, err := QueryPeriodRequests(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	if err != nil {
+		return resp, err
+	}
+	prevRequests, err := QueryPeriodRequests(ctx, db, spec.PreviousStart, spec.PreviousEnd)
+	if err != nil {
+		return resp, err
+	}
+	requestBuckets, err := QueryRequestsSparkline(ctx, db, w, spec.SparklineGrain,
+		spec.SparklineStart, spec.PeriodEnd)
+	if err != nil {
+		return resp, err
+	}
+
 	modelTok, err := QueryModelTokens(ctx, db)
 	if err != nil {
 		return resp, err
@@ -81,6 +95,11 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 		HitRate:        cacheHitRate(cacheRead, cacheCreation),
 		ReadTokens:     cacheRead,
 		CreationTokens: cacheCreation,
+	}
+	resp.Requests = RequestsBlock{
+		Total:     curRequests,
+		PrevTotal: prevRequests,
+		Sparkline: fillTokensSparkline(requestBuckets, spec, w.Loc),
 	}
 	resp.Models = mergeModelGroups(c, modelTok, modelC, modelR)
 	return resp, nil

@@ -9,12 +9,13 @@ package dashboard
 // `range` window (day / week / month). The model breakdown table stays
 // all-time — it's a global mix indicator, range-independent by design.
 type SnapshotResponse struct {
-	UpdatedAt string       `json:"updated_at"`
-	Range     string       `json:"range"`
-	Tokens    TokensBlock  `json:"tokens"`
-	Cost      CostBlock    `json:"cost"`
-	Cache     CacheBlock   `json:"cache"`
-	Models    []ModelBlock `json:"models"`
+	UpdatedAt string        `json:"updated_at"`
+	Range     string        `json:"range"`
+	Tokens    TokensBlock   `json:"tokens"`
+	Cost      CostBlock     `json:"cost"`
+	Cache     CacheBlock    `json:"cache"`
+	Requests  RequestsBlock `json:"requests"`
+	Models    []ModelBlock  `json:"models"`
 }
 
 type TokensBlock struct {
@@ -29,6 +30,15 @@ type CostBlock struct {
 	Total     float64   `json:"total"`
 	PrevTotal float64   `json:"prev_total"`
 	Sparkline []float64 `json:"sparkline"`
+}
+
+// RequestsBlock counts API requests (rows in event_api_request) in the
+// current window, the previous same-length window, and per-bucket for the
+// sparkline. Mirrors TokensBlock's shape.
+type RequestsBlock struct {
+	Total     int64   `json:"total"`
+	PrevTotal int64   `json:"prev_total"`
+	Sparkline []int64 `json:"sparkline"`
 }
 
 // CacheBlock describes prompt-cache efficacy in the current window.

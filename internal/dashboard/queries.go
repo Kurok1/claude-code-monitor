@@ -112,6 +112,21 @@ func QueryPeriodCache(ctx context.Context, db *sql.DB, start, end time.Time) (re
 	return read, creation, nil
 }
 
+// QueryPeriodRequests — count of API requests in [start, end).
+func QueryPeriodRequests(ctx context.Context, db *sql.DB, start, end time.Time) (int64, error) {
+	const q = `
+		SELECT COUNT(*)
+		FROM event_api_request
+		WHERE ts >= ? AND ts < ?
+	`
+	var v int64
+	err := db.QueryRowContext(ctx, q, start, end).Scan(&v)
+	if err != nil {
+		return 0, fmt.Errorf("query period requests: %w", err)
+	}
+	return v, nil
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Sparkline queries — bucketed by `grain` over [start, end).
 // ─────────────────────────────────────────────────────────────────────
@@ -178,6 +193,36 @@ func QueryCostSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain str
 		var b periodCostBucket
 		if err := rows.Scan(&b.Bucket, &b.Cost); err != nil {
 			return nil, fmt.Errorf("scan cost sparkline: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// QueryRequestsSparkline — bucketed request counts. Reuses periodBucket so
+// the caller can pad with fillTokensSparkline.
+func QueryRequestsSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain string, start, end time.Time) ([]periodBucket, error) {
+	q := fmt.Sprintf(`
+		SELECT
+		  CAST(%s AS DATE) AS bucket,
+		  COUNT(*)         AS total
+		FROM event_api_request
+		WHERE ts >= ? AND ts < ?
+		GROUP BY 1
+		ORDER BY 1
+	`, localGrainExpr(w, "ts", grain))
+
+	rows, err := db.QueryContext(ctx, q, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("query requests sparkline: %w", err)
+	}
+	defer rows.Close()
+
+	var out []periodBucket
+	for rows.Next() {
+		var b periodBucket
+		if err := rows.Scan(&b.Bucket, &b.Total); err != nil {
+			return nil, fmt.Errorf("scan requests sparkline: %w", err)
 		}
 		out = append(out, b)
 	}
