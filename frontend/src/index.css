@@ -1,4 +1,31 @@
-@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,600;1,8..60,300;1,8..60,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@font-face {
+  font-family: 'Mononoki Nerd Font';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/MononokiNerdFont-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Mononoki Nerd Font';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/MononokiNerdFont-Italic.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Mononoki Nerd Font';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/MononokiNerdFont-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Mononoki Nerd Font';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/MononokiNerdFont-BoldItalic.woff2') format('woff2');
+}
 
 :root {
   --color-orange-50:  #FDF3EE;
@@ -57,9 +84,11 @@
   --border-subtle:   var(--color-neutral-100);
   --border-accent:   var(--color-orange-400);
 
-  --font-serif:  'Source Serif 4', Georgia, serif;
-  --font-sans:   'Plus Jakarta Sans', system-ui, sans-serif;
-  --font-mono:   'JetBrains Mono', 'Courier New', monospace;
+  /* Unified: Mononoki Nerd Font for Latin/digits/symbols; CJK falls back to the platform Chinese face. */
+  --font-mononoki: 'Mononoki Nerd Font', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', monospace;
+  --font-serif:  var(--font-mononoki);
+  --font-sans:   var(--font-mononoki);
+  --font-mono:   var(--font-mononoki);
 
   --text-xs:    0.75rem;
   --text-sm:    0.875rem;
