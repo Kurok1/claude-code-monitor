@@ -48,6 +48,16 @@ export interface SkillUsage {
   activations: number;
 }
 
+// One calendar day of the 360-day usage heatmap. Raw components feed the
+// tooltip; `score` (composite intensity, [0,1]) drives the cell color.
+export interface HeatmapDay {
+  date: string; // YYYY-MM-DD
+  tokens: number;
+  cost: number;
+  requests: number;
+  score: number;
+}
+
 export interface DashboardData {
   updatedAt: string;
   range: Range;
@@ -80,6 +90,10 @@ export interface DashboardData {
   };
   tools: ToolUsage[];
   skills: SkillUsage[];
+  heatmap: {
+    weights: { tokens: number; cost: number; requests: number };
+    points: HeatmapDay[];
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -202,6 +216,20 @@ interface RankingsWire {
   skills: SkillUsage[];
 }
 
+interface HeatmapWire {
+  updated_at: string;
+  days: number;
+  timezone: string;
+  weights: { tokens: number; cost: number; requests: number };
+  points: Array<{
+    date: string;
+    tokens: number;
+    cost: number;
+    requests: number;
+    score: number;
+  }>;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────
@@ -217,16 +245,22 @@ async function getJSON<T>(url: string): Promise<T> {
 
 export const Dashboard = {
   async fetch(range: Range = 'day', since: Since = '7d'): Promise<DashboardData> {
-    const [snap, trends, rankings] = await Promise.all([
+    const [snap, trends, rankings, heatmap] = await Promise.all([
       getJSON<SnapshotWire>(`/api/usage/snapshot?range=${range}`),
       getJSON<TrendsWire>(`/api/usage/trends?range=${range}`),
       getJSON<RankingsWire>(`/api/usage/rankings?since=${since}`),
+      getJSON<HeatmapWire>(`/api/usage/heatmap`),
     ]);
-    return adapt(snap, trends, rankings);
+    return adapt(snap, trends, rankings, heatmap);
   },
 };
 
-function adapt(snap: SnapshotWire, trends: TrendsWire, rankings: RankingsWire): DashboardData {
+function adapt(
+  snap: SnapshotWire,
+  trends: TrendsWire,
+  rankings: RankingsWire,
+  heatmap: HeatmapWire,
+): DashboardData {
   return {
     updatedAt: snap.updated_at,
     range: snap.range,
@@ -253,5 +287,6 @@ function adapt(snap: SnapshotWire, trends: TrendsWire, rankings: RankingsWire): 
     },
     tools: rankings.tools,
     skills: rankings.skills,
+    heatmap: { weights: heatmap.weights, points: heatmap.points },
   };
 }

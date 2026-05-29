@@ -11,7 +11,7 @@ import (
 	"github.com/kuroky/claude-code-monitor/internal/config"
 )
 
-// Handler exposes /api/usage/{snapshot,trends,rankings}.
+// Handler exposes /api/usage/{snapshot,trends,rankings,heatmap}.
 // All endpoints serve JSON and short-cache via `Cache-Control: private, max-age=30`.
 type Handler struct {
 	db         *sql.DB
@@ -47,6 +47,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleTrends(w, r)
 	case "/api/usage/rankings":
 		h.handleRankings(w, r)
+	case "/api/usage/heatmap":
+		h.handleHeatmap(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -122,6 +124,28 @@ func (h *Handler) handleRankings(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		h.log.Error("rankings: build", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleHeatmap serves the fixed 360-day usage heatmap. No request params —
+// the window is always the trailing 360 local days; weights come from config.
+func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
+	if err != nil {
+		h.log.Error("heatmap: build time window", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	resp, err := BuildHeatmap(r.Context(), h.db, tw, HeatmapWeights{
+		Tokens:   h.cfg.Heatmap.WTokens,
+		Cost:     h.cfg.Heatmap.WCost,
+		Requests: h.cfg.Heatmap.WRequests,
+	})
+	if err != nil {
+		h.log.Error("heatmap: build", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

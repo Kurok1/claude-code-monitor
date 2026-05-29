@@ -22,6 +22,14 @@ dashboard:
     tools: 10                  # 工具排名 Top N
     skills: 10                 # Skill 排名 Top N
   timezone: "Asia/Shanghai"    # 业务时区，全部时间窗按此切分
+  # 用量热点图 (/api/usage/heatmap) 每天的综合强度权重。
+  # score = (w_tokens·norm(tokens) + w_cost·norm(cost) + w_requests·norm(requests)) / Σw
+  # 各指标按最近 360 天窗口内的最大值归一化到 [0,1] (空白天 = 0)。
+  # 权重为相对值 (只看比例)；三者全为 0 时回退默认 0.4/0.4/0.2。
+  heatmap:
+    w_tokens: 0.4
+    w_cost: 0.4
+    w_requests: 0.2
   # model_groups: 自定义聚合规则。按顺序匹配,首个命中生效;未命中时若符合
   # claude-(opus|sonnet|haiku)-X-Y 模式,内置规则会输出 family-X.Y;否则保留原名。
   # `group` 可用 $1/$2 反向引用正则捕获组。

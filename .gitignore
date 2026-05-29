@@ -7,6 +7,9 @@ captured/
 config.yaml
 config.dev.yaml
 
+# playwright-cli browser snapshots/screenshots (debug tooling output)
+.playwright-cli/
+
 # Frontend
 node_modules/
 frontend/dist/

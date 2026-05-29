@@ -1,0 +1,207 @@
+/**
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
+ * @since 0.0.0
+ */
+// GitHub-contributions-style calendar heatmap. Renders one SVG <rect> per
+// calendar day, colored by a 5-level quantile bucket of the backend-computed
+// composite `score` (level 0 = no activity). Hand-rolled SVG, no chart libs.
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { HeatmapDay } from '../../api/dashboard';
+import { formatCurrency, formatTokens } from '../../lib/format';
+
+interface Props {
+  days: HeatmapDay[];
+}
+
+const GAP = 3;
+const TOP = 18; // month-label band height
+const LEFT = 26; // weekday-label gutter width
+const MIN_STEP = 14; // min cell pitch before the grid scrolls horizontally
+const MAX_STEP = 36; // cap cell pitch on very wide cards
+const WEEKDAY_LABELS = ['一', '', '三', '', '五', '', '日']; // Monday-first
+
+// Parse "YYYY-MM-DD" as a LOCAL calendar date (avoid the UTC shift that
+// `new Date("YYYY-MM-DD")` applies).
+function parseDay(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+// Monday=0 … Sunday=6.
+function weekdayMon(d: Date): number {
+  return (d.getDay() + 6) % 7;
+}
+
+// Linear-interpolated quantile of a pre-sorted ascending array.
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  return base + 1 < sorted.length
+    ? sorted[base] + rest * (sorted[base + 1] - sorted[base])
+    : sorted[base];
+}
+
+interface Cell {
+  i: number;
+  day: HeatmapDay;
+  col: number;
+  row: number;
+}
+
+export function CalendarHeatmap({ days }: Props) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
+  const [cw, setCw] = useState(1000);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setCw(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const { cells, weeks, monthLabels, levelOf } = useMemo(() => {
+    // Quartile thresholds over POSITIVE scores; empty days are level 0.
+    const positives = days
+      .map(d => d.score)
+      .filter(s => s > 0)
+      .sort((a, b) => a - b);
+    const t1 = quantile(positives, 0.25);
+    const t2 = quantile(positives, 0.5);
+    const t3 = quantile(positives, 0.75);
+    const levelOf = (score: number): number => {
+      if (score <= 0) return 0;
+      if (score <= t1) return 1;
+      if (score <= t2) return 2;
+      if (score <= t3) return 3;
+      return 4;
+    };
+
+    if (days.length === 0) {
+      return { cells: [] as Cell[], weeks: 0, monthLabels: [] as { col: number; label: string }[], levelOf };
+    }
+
+    const firstMonOffset = weekdayMon(parseDay(days[0].date));
+    const cells: Cell[] = days.map((day, i) => ({
+      i,
+      day,
+      col: Math.floor((firstMonOffset + i) / 7),
+      row: weekdayMon(parseDay(day.date)),
+    }));
+    const weeks = cells[cells.length - 1].col + 1;
+
+    const monthLabels: { col: number; label: string }[] = [];
+    let lastMonth = -1;
+    for (const c of cells) {
+      const mo = parseDay(c.day.date).getMonth();
+      if (mo !== lastMonth) {
+        monthLabels.push({ col: c.col, label: `${mo + 1}月` });
+        lastMonth = mo;
+      }
+    }
+    return { cells, weeks, monthLabels, levelOf };
+  }, [days]);
+
+  // Cell pitch stretches so the grid fills the card width; clamped so cells
+  // stay legible (scrolls horizontally below MIN_STEP, capped at MAX_STEP).
+  const stepRaw = weeks > 0 ? (cw - LEFT) / weeks : MIN_STEP;
+  const STEP = Math.max(MIN_STEP, Math.min(MAX_STEP, stepRaw));
+  const CELL = STEP - GAP;
+  const RX = Math.max(2, Math.round(CELL * 0.16));
+  const W = LEFT + weeks * STEP;
+  const H = TOP + 7 * STEP;
+  const hoverCell = hover ? cells[hover.i] : null;
+
+  // Capture pointer position (relative to the wrap's visible box) so the
+  // tooltip sits at the cursor and can flip away from the edges — robust to
+  // horizontal scrolling on narrow screens.
+  const onCellEnter = (e: React.MouseEvent, i: number) => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const r = wrap.getBoundingClientRect();
+    setHover({ i, x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
+  };
+
+  // The grid is short (7 rows) but wide, so a vertically-opening tooltip would
+  // overflow it. Instead open the tooltip to the SIDE of the cursor —
+  // vertically centered — flipping to the left for right-half cells so the
+  // right-edge active days get their tooltip over the empty left area.
+  let tipStyle: React.CSSProperties | undefined;
+  if (hover) {
+    const flipLeft = hover.x > hover.w * 0.5;
+    tipStyle = {
+      left: hover.x,
+      top: hover.y,
+      transform: `translate(${flipLeft ? '-100%' : '0'}, -50%) translate(${flipLeft ? -10 : 10}px, 0)`,
+    };
+  }
+
+  return (
+    <div className="heatmap-wrap" ref={wrapRef}>
+      <div className="heatmap-scroll">
+        <svg className="heatmap-svg" width={W} height={H} role="img" aria-label="最近 360 天用量热点图">
+          {WEEKDAY_LABELS.map((l, r) =>
+            l ? (
+              <text
+                key={r}
+                className="heatmap-wd"
+                x={LEFT - 6}
+                y={TOP + r * STEP + CELL / 2}
+                textAnchor="end"
+                dominantBaseline="central"
+              >
+                {l}
+              </text>
+            ) : null,
+          )}
+          {monthLabels.map((m, i) => (
+            <text key={i} className="heatmap-mo" x={LEFT + m.col * STEP} y={TOP - 6}>
+              {m.label}
+            </text>
+          ))}
+          {cells.map(c => (
+            <rect
+              key={c.i}
+              className="heatmap-cell"
+              data-level={levelOf(c.day.score)}
+              x={LEFT + c.col * STEP}
+              y={TOP + c.row * STEP}
+              width={CELL}
+              height={CELL}
+              rx={RX}
+              onMouseEnter={e => onCellEnter(e, c.i)}
+              onMouseLeave={() => setHover(null)}
+            />
+          ))}
+        </svg>
+      </div>
+
+      {hoverCell && (
+        <div className="chart-tooltip heatmap-tip" data-visible="true" style={tipStyle}>
+          <div className="chart-tooltip__date">{hoverCell.day.date}</div>
+          <div className="chart-tooltip__row">
+            <span>Token</span>
+            <span>{formatTokens(hoverCell.day.tokens)}</span>
+          </div>
+          <div className="chart-tooltip__row">
+            <span>费用</span>
+            <span>{formatCurrency(hoverCell.day.cost)}</span>
+          </div>
+          <div className="chart-tooltip__row">
+            <span>请求</span>
+            <span>{hoverCell.day.requests.toLocaleString()}</span>
+          </div>
+          <div className="chart-tooltip__total">
+            <span>综合强度</span>
+            <span>{(hoverCell.day.score * 100).toFixed(0)}%</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
