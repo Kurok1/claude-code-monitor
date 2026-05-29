@@ -758,6 +758,46 @@ body[data-theme="dark"] .kpi__delta.down { color: #E47B7B; background: color-mix
   font-family: var(--font-sans);
 }
 
+/* ── Usage heatmap ── */
+.heatmap-wrap { position: relative; width: 100%; overflow-x: auto; }
+.heatmap-svg { display: block; }
+
+.heatmap-cell {
+  fill: var(--bg-inset);
+  transition: fill var(--transition-fast);
+  cursor: pointer;
+}
+.heatmap-cell:hover { stroke: var(--fg-2); stroke-width: 1; }
+.heatmap-cell[data-level="0"] { fill: var(--bg-inset); }
+.heatmap-cell[data-level="1"] { fill: var(--color-orange-200); }
+.heatmap-cell[data-level="2"] { fill: var(--color-orange-300); }
+.heatmap-cell[data-level="3"] { fill: var(--color-orange-400); }
+.heatmap-cell[data-level="4"] { fill: var(--color-orange-600); }
+body[data-theme="dark"] .heatmap-cell[data-level="0"] { fill: var(--bg-alt); }
+
+.heatmap-wd, .heatmap-mo {
+  fill: var(--fg-3);
+  font-size: 10px;
+  font-family: var(--font-sans);
+}
+
+.heatmap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.heatmap-legend i {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* Heatmap tooltip rows have no series dot (unlike the trends tooltip). */
+.heatmap-tip .chart-tooltip__row span:first-child::before { display: none; }
+
 /* ── Tweaks panel ── */
 .twk-panel {
   position: fixed;
