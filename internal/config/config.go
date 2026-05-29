@@ -47,6 +47,12 @@ type DashboardConfig struct {
 	TopN     TopNConfig `yaml:"top_n"`
 	Timezone string     `yaml:"timezone"` // IANA name, e.g. "Asia/Shanghai"
 
+	// Heatmap configures the per-day composite intensity for /api/usage/heatmap.
+	// Each metric (tokens / cost / requests) is normalized against its own
+	// 360-day-window max, then combined: score = (wT·nT + wC·nC + wR·nR) / Σw.
+	// All three zero ⇒ defaults to 0.4 / 0.4 / 0.2.
+	Heatmap HeatmapConfig `yaml:"heatmap"`
+
 	// ModelGroups configures how raw model names are bucketed for the dashboard
 	// breakdown / trends. Rules are tried in order; first match wins. If nothing
 	// matches and the name fits the built-in Claude pattern, the classifier
@@ -58,6 +64,14 @@ type DashboardConfig struct {
 type TopNConfig struct {
 	Tools  int `yaml:"tools"`
 	Skills int `yaml:"skills"`
+}
+
+// HeatmapConfig holds the composite weights for the usage heatmap. Weights
+// are relative (only their ratio matters); the score is divided by their sum.
+type HeatmapConfig struct {
+	WTokens   float64 `yaml:"w_tokens"`
+	WCost     float64 `yaml:"w_cost"`
+	WRequests float64 `yaml:"w_requests"`
 }
 
 // ModelGroupRule is one user-defined classification rule. `Pattern` is a
@@ -142,6 +156,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Dashboard.Timezone == "" {
 		cfg.Dashboard.Timezone = "Asia/Shanghai"
 	}
+	h := &cfg.Dashboard.Heatmap
+	if h.WTokens == 0 && h.WCost == 0 && h.WRequests == 0 {
+		h.WTokens, h.WCost, h.WRequests = 0.4, 0.4, 0.2
+	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
@@ -175,6 +193,13 @@ func validate(cfg *Config) error {
 	}
 	if _, err := time.LoadLocation(cfg.Dashboard.Timezone); err != nil {
 		return fmt.Errorf("dashboard.timezone %q: %w", cfg.Dashboard.Timezone, err)
+	}
+	hm := cfg.Dashboard.Heatmap
+	if hm.WTokens < 0 || hm.WCost < 0 || hm.WRequests < 0 {
+		return fmt.Errorf("dashboard.heatmap weights must be >= 0")
+	}
+	if hm.WTokens+hm.WCost+hm.WRequests <= 0 {
+		return fmt.Errorf("dashboard.heatmap weights sum must be > 0")
 	}
 	switch cfg.Logging.Level {
 	case "debug", "info", "warn", "error":
