@@ -1,7 +1,7 @@
 package dashboard
 
 /**
- * @author Kurok1 <yazeedakram5544@gmail.com>
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
  * @since v1.6.0
  */
 

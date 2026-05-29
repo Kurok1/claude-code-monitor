@@ -23,7 +23,7 @@
 ### File-header rule (global CLAUDE.md)
 
 Every **new** code file must start with an `@author`/`@since` header. Existing files in this repo do **not** have them — do **not** retrofit existing files; only add to files you create.
-- `@author`: `Kurok1 <yazeedakram5544@gmail.com>` (from `git config user.name` / `user.email`).
+- `@author`: `Kurok1 <im.kurokyhanc@gmail.com>` (from `git config user.name` / `user.email`).
 - `@since` for **Go** files: `v1.6.0` (latest git tag, used verbatim).
 - `@since` for **frontend** `.ts`/`.tsx` files: `0.0.0` (from `frontend/package.json` `version`).
 - Go placement: a block comment immediately **after** the `package` line (so it is not parsed as the package doc comment).
@@ -44,7 +44,7 @@ Create `internal/config/config_test.go`:
 package config
 
 /**
- * @author Kurok1 <yazeedakram5544@gmail.com>
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
  * @since v1.6.0
  */
 
@@ -302,7 +302,7 @@ Create `internal/dashboard/heatmap_test.go`:
 package dashboard
 
 /**
- * @author Kurok1 <yazeedakram5544@gmail.com>
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
  * @since v1.6.0
  */
 
@@ -417,7 +417,7 @@ Create `internal/dashboard/heatmap.go`:
 package dashboard
 
 /**
- * @author Kurok1 <yazeedakram5544@gmail.com>
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
  * @since v1.6.0
  */
 
@@ -789,7 +789,7 @@ Create `frontend/src/components/charts/CalendarHeatmap.tsx`:
 
 ```tsx
 /**
- * @author Kurok1 <yazeedakram5544@gmail.com>
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
  * @since 0.0.0
  */
 // GitHub-contributions-style calendar heatmap. Renders one SVG <rect> per
