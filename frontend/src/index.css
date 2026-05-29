@@ -759,7 +759,8 @@ body[data-theme="dark"] .kpi__delta.down { color: #E47B7B; background: color-mix
 }
 
 /* ── Usage heatmap ── */
-.heatmap-wrap { position: relative; width: 100%; overflow-x: auto; }
+.heatmap-wrap { position: relative; width: 100%; }
+.heatmap-scroll { overflow-x: auto; }
 .heatmap-svg { display: block; }
 
 .heatmap-cell {

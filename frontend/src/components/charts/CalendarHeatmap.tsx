@@ -52,7 +52,7 @@ interface Cell {
 
 export function CalendarHeatmap({ days }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<number | null>(null);
+  const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
 
   const { cells, weeks, monthLabels, levelOf } = useMemo(() => {
     // Quartile thresholds over POSITIVE scores; empty days are level 0.
@@ -98,45 +98,67 @@ export function CalendarHeatmap({ days }: Props) {
 
   const W = LEFT + weeks * STEP + GAP;
   const H = TOP + 7 * STEP;
-  const hoverCell = hover != null ? cells[hover] : null;
+  const hoverCell = hover ? cells[hover.i] : null;
+
+  // Capture pointer position (relative to the wrap's visible box) so the
+  // tooltip sits at the cursor and can flip away from the edges — robust to
+  // horizontal scrolling on narrow screens.
+  const onCellEnter = (e: React.MouseEvent, i: number) => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const r = wrap.getBoundingClientRect();
+    setHover({ i, x: e.clientX - r.left, y: e.clientY - r.top, w: r.width });
+  };
+
+  // The grid is short (7 rows) but wide, so a vertically-opening tooltip would
+  // overflow it. Instead open the tooltip to the SIDE of the cursor —
+  // vertically centered — flipping to the left for right-half cells so the
+  // right-edge active days get their tooltip over the empty left area.
+  let tipStyle: React.CSSProperties | undefined;
+  if (hover) {
+    const flipLeft = hover.x > hover.w * 0.5;
+    tipStyle = {
+      left: hover.x,
+      top: hover.y,
+      transform: `translate(${flipLeft ? '-100%' : '0'}, -50%) translate(${flipLeft ? -10 : 10}px, 0)`,
+    };
+  }
 
   return (
     <div className="heatmap-wrap" ref={wrapRef}>
-      <svg className="heatmap-svg" width={W} height={H} role="img" aria-label="最近 360 天用量热点图">
-        {WEEKDAY_LABELS.map((l, r) =>
-          l ? (
-            <text key={r} className="heatmap-wd" x={LEFT - 6} y={TOP + r * STEP + CELL - 2} textAnchor="end">
-              {l}
+      <div className="heatmap-scroll">
+        <svg className="heatmap-svg" width={W} height={H} role="img" aria-label="最近 360 天用量热点图">
+          {WEEKDAY_LABELS.map((l, r) =>
+            l ? (
+              <text key={r} className="heatmap-wd" x={LEFT - 6} y={TOP + r * STEP + CELL - 2} textAnchor="end">
+                {l}
+              </text>
+            ) : null,
+          )}
+          {monthLabels.map((m, i) => (
+            <text key={i} className="heatmap-mo" x={LEFT + m.col * STEP} y={TOP - 6}>
+              {m.label}
             </text>
-          ) : null,
-        )}
-        {monthLabels.map((m, i) => (
-          <text key={i} className="heatmap-mo" x={LEFT + m.col * STEP} y={TOP - 6}>
-            {m.label}
-          </text>
-        ))}
-        {cells.map(c => (
-          <rect
-            key={c.i}
-            className="heatmap-cell"
-            data-level={levelOf(c.day.score)}
-            x={LEFT + c.col * STEP}
-            y={TOP + c.row * STEP}
-            width={CELL}
-            height={CELL}
-            rx={2}
-            onMouseEnter={() => setHover(c.i)}
-            onMouseLeave={() => setHover(null)}
-          />
-        ))}
-      </svg>
+          ))}
+          {cells.map(c => (
+            <rect
+              key={c.i}
+              className="heatmap-cell"
+              data-level={levelOf(c.day.score)}
+              x={LEFT + c.col * STEP}
+              y={TOP + c.row * STEP}
+              width={CELL}
+              height={CELL}
+              rx={2}
+              onMouseEnter={e => onCellEnter(e, c.i)}
+              onMouseLeave={() => setHover(null)}
+            />
+          ))}
+        </svg>
+      </div>
 
       {hoverCell && (
-        <div
-          className="chart-tooltip heatmap-tip"
-          data-visible="true"
-          style={{ left: LEFT + hoverCell.col * STEP + CELL / 2, top: TOP + hoverCell.row * STEP }}
-        >
+        <div className="chart-tooltip heatmap-tip" data-visible="true" style={tipStyle}>
           <div className="chart-tooltip__date">{hoverCell.day.date}</div>
           <div className="chart-tooltip__row">
             <span>Token</span>
