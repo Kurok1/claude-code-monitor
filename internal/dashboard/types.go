@@ -100,3 +100,38 @@ type SkillRank struct {
 	Name        string `json:"name"`
 	Activations int64  `json:"activations"`
 }
+
+// HeatmapResponse → GET /api/usage/heatmap
+//
+// A fixed 360-day daily calendar heatmap, range-independent by design
+// (always the trailing 360 local days). Each point carries the raw per-day
+// components plus a composite Score in [0,1]: each component is normalized
+// against its own 360-day-window max (min pinned at 0 — a zero day means
+// "no activity"), then combined with the config weights:
+//
+//	score = (wT·nT + wC·nC + wR·nR) / (wT + wC + wR)
+type HeatmapResponse struct {
+	UpdatedAt string         `json:"updated_at"`
+	Days      int            `json:"days"`     // always 360
+	Timezone  string         `json:"timezone"` // IANA name used for day bucketing
+	Weights   HeatmapWeights `json:"weights"`
+	Points    []HeatmapPoint `json:"points"`
+}
+
+// HeatmapWeights echoes the configured composite weights so the UI can
+// caption the chart. They are relative (the score is divided by their sum).
+type HeatmapWeights struct {
+	Tokens   float64 `json:"tokens"`
+	Cost     float64 `json:"cost"`
+	Requests float64 `json:"requests"`
+}
+
+// HeatmapPoint is one calendar day. Raw components feed the tooltip; Score
+// (composite intensity, [0,1]) drives the cell color.
+type HeatmapPoint struct {
+	Date     string  `json:"date"` // YYYY-MM-DD, local calendar day
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
+	Requests int64   `json:"requests"`
+	Score    float64 `json:"score"`
+}
