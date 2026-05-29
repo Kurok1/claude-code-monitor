@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// heatmapDays is the fixed calendar span of the usage heatmap (≈ 1 year).
+const heatmapDays = 360
+
 // TimeWindow holds all boundary instants the dashboard queries need.
 // All fields are UTC instants — the timezone we care about (Asia/Shanghai
 // by default) is already baked into how the boundaries are computed.
@@ -38,6 +41,10 @@ type TimeWindow struct {
 	DayTrendStartUTC   time.Time // today_start - 13d
 	WeekTrendStartUTC  time.Time // this_week_start - 11w
 	MonthTrendStartUTC time.Time // this_month_start - 11mo
+
+	// HeatmapStartUTC is the local-midnight start of the trailing 360-day
+	// calendar window (today - 359d), as a UTC instant.
+	HeatmapStartUTC time.Time
 }
 
 // NowWindow computes a TimeWindow rooted at the wall-clock `now` interpreted
@@ -74,6 +81,7 @@ func windowAt(nowInLoc time.Time, loc *time.Location) TimeWindow {
 		DayTrendStartUTC:   todayStart.Add(-13 * 24 * time.Hour).UTC(),
 		WeekTrendStartUTC:  weekStart.AddDate(0, 0, -7*11).UTC(),
 		MonthTrendStartUTC: addMonths(monthStart, -11).UTC(),
+		HeatmapStartUTC:    todayStart.AddDate(0, 0, -(heatmapDays - 1)).UTC(),
 	}
 }
 

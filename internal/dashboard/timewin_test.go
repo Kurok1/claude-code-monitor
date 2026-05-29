@@ -56,6 +56,21 @@ func TestNowWindow_Shanghai(t *testing.T) {
 	}
 }
 
+func TestNowWindow_HeatmapStart(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, loc)
+	w, err := NowWindow(now, "Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("NowWindow: %v", err)
+	}
+	// Today (SH 2026-05-13) start = UTC 2026-05-12 16:00.
+	// Heatmap spans 360 days inclusive → start = today - 359 days.
+	wantStart := time.Date(2026, 5, 12, 16, 0, 0, 0, time.UTC).AddDate(0, 0, -359)
+	if !w.HeatmapStartUTC.Equal(wantStart) {
+		t.Errorf("HeatmapStartUTC = %v, want %v (today-359d)", w.HeatmapStartUTC, wantStart)
+	}
+}
+
 func TestMondayOf(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	cases := []struct {
