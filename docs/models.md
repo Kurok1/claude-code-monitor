@@ -592,6 +592,18 @@ DuckDB 单文件长期增长后查询性能下降。建议：
 
 ---
 
+### 5.7 用量热点图（heatmap）
+
+`GET /api/usage/heatmap` 复用现有三张表按本地日（`date_trunc('day', ts + INTERVAL N HOUR)`）聚合，**无需新增表 / 迁移**：
+
+- Token：`SUM(value)` from `metric_token_usage`
+- 费用：`SUM(value)` from `metric_cost_usage`
+- 请求：`COUNT(*)` from `event_api_request`
+
+固定取最近 360 个本地日（含今日），逐日补零。每天的综合强度 `score ∈ [0,1]` 在 Go 侧计算：各指标按 360 天窗口内最大值归一化（min 固定为 0），再用 `config.yaml` 的 `dashboard.heatmap` 权重加权后除以权重和。前端按分位数把 `score` 分成 5 档着色。
+
+> 注意：`docs §5.6` 的归档策略（>90 天导出 parquet 后 `DELETE`）一旦实装，360 天热点图需要 `UNION read_parquet(...)` 才能覆盖完整窗口；当前归档未实装，故暂不受影响。
+
 ## 6. 演进策略
 
 新增 Claude Code 版本带来的字段处理流程：
