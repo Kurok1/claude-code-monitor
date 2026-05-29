@@ -7,8 +7,13 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/kuroky/claude-code-monitor/internal/config"
 )
 
 func findPoint(points []HeatmapPoint, date string) (HeatmapPoint, bool) {
@@ -99,5 +104,36 @@ func TestBuildHeatmap_WeightScaleInvariant(t *testing.T) {
 	}
 	if !approx(pa.Score, 0.5) {
 		t.Errorf("score = %v, want 0.5", pa.Score)
+	}
+}
+
+func TestHandler_Heatmap_Route(t *testing.T) {
+	db, _, _ := testDB(t)
+	insertTokenUsage(t, db, time.Now().UTC(), "claude-opus-4-1", "input", 10)
+
+	h, err := NewHandler(db, config.DashboardConfig{
+		Timezone: "Asia/Shanghai",
+		Heatmap:  config.HeatmapConfig{WTokens: 0.4, WCost: 0.4, WRequests: 0.2},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/usage/heatmap", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp HeatmapResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Points) != 360 || resp.Days != 360 {
+		t.Errorf("days=%d points=%d, want 360/360", resp.Days, len(resp.Points))
+	}
+	if resp.Weights.Tokens != 0.4 {
+		t.Errorf("weights echoed = %+v", resp.Weights)
 	}
 }
