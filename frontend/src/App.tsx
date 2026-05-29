@@ -369,6 +369,28 @@ export default function App() {
         <section className="card">
           <div className="card-head">
             <div>
+              <h3>用量热点图</h3>
+              <div className="card-sub">
+                最近 360 天 · 综合用量（Token×{data.heatmap.weights.tokens} / 费用×
+                {data.heatmap.weights.cost} / 请求×{data.heatmap.weights.requests}）
+              </div>
+            </div>
+            <div className="heatmap-legend">
+              <span>少</span>
+              <i style={{ background: 'var(--bg-inset)' }} />
+              <i style={{ background: 'var(--color-orange-200)' }} />
+              <i style={{ background: 'var(--color-orange-300)' }} />
+              <i style={{ background: 'var(--color-orange-400)' }} />
+              <i style={{ background: 'var(--color-orange-600)' }} />
+              <span>多</span>
+            </div>
+          </div>
+          <CalendarHeatmap days={data.heatmap.points} />
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <div>
               <h3>各模型 Token 用量趋势</h3>
               <div className="card-sub">
                 趋势对比 ·{' '}
@@ -400,28 +422,6 @@ export default function App() {
           <div className="trends">
             <StackedAreaChart points={data.series.points} series={chartSeries} />
           </div>
-        </section>
-
-        <section className="card">
-          <div className="card-head">
-            <div>
-              <h3>用量热点图</h3>
-              <div className="card-sub">
-                最近 360 天 · 综合用量（Token×{data.heatmap.weights.tokens} / 费用×
-                {data.heatmap.weights.cost} / 请求×{data.heatmap.weights.requests}）
-              </div>
-            </div>
-            <div className="heatmap-legend">
-              <span>少</span>
-              <i style={{ background: 'var(--bg-inset)' }} />
-              <i style={{ background: 'var(--color-orange-200)' }} />
-              <i style={{ background: 'var(--color-orange-300)' }} />
-              <i style={{ background: 'var(--color-orange-400)' }} />
-              <i style={{ background: 'var(--color-orange-600)' }} />
-              <span>多</span>
-            </div>
-          </div>
-          <CalendarHeatmap days={data.heatmap.points} />
         </section>
 
         <div className="section-head">
