@@ -5,7 +5,7 @@
 // GitHub-contributions-style calendar heatmap. Renders one SVG <rect> per
 // calendar day, colored by a 5-level quantile bucket of the backend-computed
 // composite `score` (level 0 = no activity). Hand-rolled SVG, no chart libs.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HeatmapDay } from '../../api/dashboard';
 import { formatCurrency, formatTokens } from '../../lib/format';
 
@@ -13,11 +13,11 @@ interface Props {
   days: HeatmapDay[];
 }
 
-const CELL = 12;
 const GAP = 3;
-const STEP = CELL + GAP;
 const TOP = 18; // month-label band height
 const LEFT = 26; // weekday-label gutter width
+const MIN_STEP = 14; // min cell pitch before the grid scrolls horizontally
+const MAX_STEP = 36; // cap cell pitch on very wide cards
 const WEEKDAY_LABELS = ['一', '', '三', '', '五', '', '日']; // Monday-first
 
 // Parse "YYYY-MM-DD" as a LOCAL calendar date (avoid the UTC shift that
@@ -53,6 +53,17 @@ interface Cell {
 export function CalendarHeatmap({ days }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ i: number; x: number; y: number; w: number } | null>(null);
+  const [cw, setCw] = useState(1000);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setCw(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const { cells, weeks, monthLabels, levelOf } = useMemo(() => {
     // Quartile thresholds over POSITIVE scores; empty days are level 0.
@@ -96,7 +107,13 @@ export function CalendarHeatmap({ days }: Props) {
     return { cells, weeks, monthLabels, levelOf };
   }, [days]);
 
-  const W = LEFT + weeks * STEP + GAP;
+  // Cell pitch stretches so the grid fills the card width; clamped so cells
+  // stay legible (scrolls horizontally below MIN_STEP, capped at MAX_STEP).
+  const stepRaw = weeks > 0 ? (cw - LEFT) / weeks : MIN_STEP;
+  const STEP = Math.max(MIN_STEP, Math.min(MAX_STEP, stepRaw));
+  const CELL = STEP - GAP;
+  const RX = Math.max(2, Math.round(CELL * 0.16));
+  const W = LEFT + weeks * STEP;
   const H = TOP + 7 * STEP;
   const hoverCell = hover ? cells[hover.i] : null;
 
@@ -130,7 +147,14 @@ export function CalendarHeatmap({ days }: Props) {
         <svg className="heatmap-svg" width={W} height={H} role="img" aria-label="最近 360 天用量热点图">
           {WEEKDAY_LABELS.map((l, r) =>
             l ? (
-              <text key={r} className="heatmap-wd" x={LEFT - 6} y={TOP + r * STEP + CELL - 2} textAnchor="end">
+              <text
+                key={r}
+                className="heatmap-wd"
+                x={LEFT - 6}
+                y={TOP + r * STEP + CELL / 2}
+                textAnchor="end"
+                dominantBaseline="central"
+              >
                 {l}
               </text>
             ) : null,
@@ -149,7 +173,7 @@ export function CalendarHeatmap({ days }: Props) {
               y={TOP + c.row * STEP}
               width={CELL}
               height={CELL}
-              rx={2}
+              rx={RX}
               onMouseEnter={e => onCellEnter(e, c.i)}
               onMouseLeave={() => setHover(null)}
             />
