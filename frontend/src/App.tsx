@@ -9,6 +9,7 @@ import { TweaksPanel, useTweaks } from './components/TweaksPanel';
 import { Dashboard } from './api/dashboard';
 import type { DashboardData, Range, Since } from './api/dashboard';
 import { formatCurrency, formatPct, formatTokens } from './lib/format';
+import { TOOL_PALETTE, SKILL_PALETTE } from './lib/palette';
 
 function useAnimated(target: number, duration = 700): number {
   const [val, setVal] = useState(0);
@@ -87,29 +88,6 @@ function KpiCard({ icon, label, value, unit, delta, foot, sparkValues, sparkColo
     </div>
   );
 }
-
-const TOOL_PALETTE = [
-  'var(--accent)',
-  'var(--accent-300)',
-  'var(--accent-200)',
-  'var(--accent-100)',
-  '#8C8580',
-  '#B8B2A8',
-  '#D5CFC5',
-  '#E8E4DC',
-  '#F4F1EB',
-];
-
-const SKILL_PALETTE = [
-  '#D97757',
-  '#3B6FD4',
-  '#2D7D46',
-  '#D4860A',
-  '#A8502C',
-  '#274EA0',
-  '#1E5730',
-  '#9A6107',
-];
 
 export default function App() {
   const [tweaks, setTweak] = useTweaks();
