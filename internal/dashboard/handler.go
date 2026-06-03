@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kuroky/claude-code-monitor/internal/config"
@@ -49,7 +51,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleRankings(w, r)
 	case "/api/usage/heatmap":
 		h.handleHeatmap(w, r)
+	case "/api/sessions":
+		h.handleSessionList(w, r)
 	default:
+		if strings.HasPrefix(r.URL.Path, "/api/sessions/") {
+			h.handleSessionDetail(w, r)
+			return
+		}
 		writeError(w, http.StatusNotFound, "not found")
 	}
 }
@@ -150,6 +158,55 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSessionList serves GET /api/sessions?limit= — the most recently
+// active sessions, newest first. limit defaults to 30, clamped to [1, 200].
+func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {
+	limit := parseLimit(r.URL.Query().Get("limit"), 30, 200)
+	resp, err := BuildSessionList(r.Context(), h.db, limit)
+	if err != nil {
+		h.log.Error("sessions: list", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleSessionDetail serves GET /api/sessions/{id}. Unknown ids → 404.
+func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
+	if err != nil {
+		h.log.Error("sessions: detail", "err", err, "session_id", id)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// parseLimit parses a positive int from raw, falling back to def and capping
+// at max. Empty / invalid / non-positive input → def.
+func parseLimit(raw string, def, max int) int {
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 // isUserError returns true when err comes from input validation
