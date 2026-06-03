@@ -70,7 +70,7 @@ export function SessionDetailView({ id, onBack }: Props) {
   const toolsForDonut = d.tools.map((t, i) => ({
     name: t.name,
     value: t.count,
-    color: TOOL_PALETTE[i] || 'var(--fg-3)',
+    color: TOOL_PALETTE[i % TOOL_PALETTE.length],
   }));
   const skillsForDonut = d.skills.map((s, i) => ({
     name: s.name,
@@ -123,7 +123,7 @@ export function SessionDetailView({ id, onBack }: Props) {
               <div className="rank-list">
                 {d.tools.map((t, i) => (
                   <div className="rank-list__row" key={t.name}>
-                    <span className="rank-list__dot" style={{ background: TOOL_PALETTE[i] || 'var(--fg-3)' }} />
+                    <span className="rank-list__dot" style={{ background: TOOL_PALETTE[i % TOOL_PALETTE.length] }} />
                     <span className="rank-list__name">{t.name}</span>
                     <span className="rank-list__count">{t.count.toLocaleString()}</span>
                     <span className="rank-list__pct">

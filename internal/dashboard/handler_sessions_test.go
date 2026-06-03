@@ -6,6 +6,7 @@ package dashboard
  */
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -56,8 +57,16 @@ func TestHandler_SessionRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("detail status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+	// abc-123 has no tools/skills: assert the raw JSON serializes empty pies as
+	// [] (not null). Decoding into the struct can't tell [] from null — both
+	// unmarshal to a nil slice — but the frontend maps over these arrays, so a
+	// null would crash the UI. Guard the regression at the byte level.
+	body := rec.Body.Bytes()
+	if !bytes.Contains(body, []byte(`"tools":[]`)) || !bytes.Contains(body, []byte(`"skills":[]`)) {
+		t.Errorf("empty pies must serialize as []: %s", body)
+	}
 	var detail SessionDetailResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+	if err := json.Unmarshal(body, &detail); err != nil {
 		t.Fatalf("decode detail: %v", err)
 	}
 	if detail.SessionID != "abc-123" || detail.Requests != 1 {
@@ -76,5 +85,25 @@ func TestHandler_SessionRoutes(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/sessions/", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("empty id status = %d, want 404", rec.Code)
+	}
+}
+
+func TestParseLimit(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want int
+	}{
+		{"", 30},                     // default
+		{"0", 30},                    // non-positive → default
+		{"-5", 30},                   // negative → default
+		{"abc", 30},                  // non-numeric → default
+		{"50", 50},                   // in range
+		{"9999", 200},                // capped at max
+		{"99999999999999999999", 30}, // Atoi overflow error → default
+	}
+	for _, c := range cases {
+		if got := parseLimit(c.raw, 30, 200); got != c.want {
+			t.Errorf("parseLimit(%q) = %d, want %d", c.raw, got, c.want)
+		}
 	}
 }

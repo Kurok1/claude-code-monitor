@@ -167,6 +167,44 @@ func TestBuildSessionList_OrdersByLastActivity(t *testing.T) {
 	}
 }
 
+// TestSession_PromptOnly locks the spec'd edge case: a session present only in
+// event_user_prompt (no api_request/token/tool/skill) must still be listed with
+// zero counts, and its detail must return found=true with non-nil empty pies
+// (so the JSON serializes [] not null — the frontend maps over these).
+func TestSession_PromptOnly(t *testing.T) {
+	db, w, _ := testDB(t)
+	ts := w.TodayStartUTC.Add(time.Hour)
+	insertSessionRow(t, db, "event_user_prompt", "prompt-only", ts)
+
+	ctx := context.Background()
+
+	list, err := BuildSessionList(ctx, db, 30)
+	if err != nil {
+		t.Fatalf("BuildSessionList: %v", err)
+	}
+	if len(list.Sessions) != 1 || list.Sessions[0].SessionID != "prompt-only" {
+		t.Fatalf("list = %+v", list.Sessions)
+	}
+	s := list.Sessions[0]
+	if s.Tokens != 0 || s.Requests != 0 || s.ToolCalls != 0 || s.SkillActivations != 0 {
+		t.Errorf("prompt-only counts should be zero: %+v", s)
+	}
+
+	detail, found, err := BuildSessionDetail(ctx, db, "prompt-only", 10, 10)
+	if err != nil {
+		t.Fatalf("BuildSessionDetail: %v", err)
+	}
+	if !found {
+		t.Fatalf("prompt-only session should be found")
+	}
+	if detail.Tools == nil || detail.Skills == nil {
+		t.Errorf("Tools/Skills must be non-nil (serialize as [] not null): %+v", detail)
+	}
+	if len(detail.Tools) != 0 || len(detail.Skills) != 0 {
+		t.Errorf("pies should be empty: tools=%+v skills=%+v", detail.Tools, detail.Skills)
+	}
+}
+
 // ── session-scoped insert helpers ───────────────────────────────────────
 // The shared helpers in queries_test.go don't set session_id; these do.
 
