@@ -11,6 +11,8 @@
 // display label/tier from the group key (Claude family pattern → branded
 // label; everything else → group name verbatim, tier "第三方模型").
 
+import { getJSON } from './http';
+
 export type Range = 'day' | 'week' | 'month';
 export type Since = '7d' | '30d' | 'all';
 
@@ -233,15 +235,6 @@ interface HeatmapWire {
 // ─────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────
-
-async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url, { credentials: 'same-origin' });
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    throw new Error(`GET ${url} → ${r.status}: ${body}`);
-  }
-  return (await r.json()) as T;
-}
 
 export const Dashboard = {
   async fetch(range: Range = 'day', since: Since = '7d'): Promise<DashboardData> {

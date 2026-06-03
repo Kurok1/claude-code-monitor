@@ -9,6 +9,9 @@ import { TweaksPanel, useTweaks } from './components/TweaksPanel';
 import { Dashboard } from './api/dashboard';
 import type { DashboardData, Range, Since } from './api/dashboard';
 import { formatCurrency, formatPct, formatTokens } from './lib/format';
+import { TOOL_PALETTE, SKILL_PALETTE } from './lib/palette';
+import { SessionsView } from './views/SessionsView';
+import { SessionDetailView } from './views/SessionDetailView';
 
 function useAnimated(target: number, duration = 700): number {
   const [val, setVal] = useState(0);
@@ -88,28 +91,10 @@ function KpiCard({ icon, label, value, unit, delta, foot, sparkValues, sparkColo
   );
 }
 
-const TOOL_PALETTE = [
-  'var(--accent)',
-  'var(--accent-300)',
-  'var(--accent-200)',
-  'var(--accent-100)',
-  '#8C8580',
-  '#B8B2A8',
-  '#D5CFC5',
-  '#E8E4DC',
-  '#F4F1EB',
-];
-
-const SKILL_PALETTE = [
-  '#D97757',
-  '#3B6FD4',
-  '#2D7D46',
-  '#D4860A',
-  '#A8502C',
-  '#274EA0',
-  '#1E5730',
-  '#9A6107',
-];
+// Client-side view selector (no router): the dashboard, the session list, or
+// one session's detail. Navigation is plain state — URLs are not deep-linkable
+// in this first cut.
+type View = { name: 'dashboard' } | { name: 'sessions' } | { name: 'session'; id: string };
 
 export default function App() {
   const [tweaks, setTweak] = useTweaks();
@@ -122,6 +107,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(new Date());
   const [refreshKey, setRefreshKey] = useState(0);
+  const [view, setView] = useState<View>({ name: 'dashboard' });
 
   useEffect(() => {
     let cancelled = false;
@@ -175,13 +161,83 @@ export default function App() {
     };
   }, []);
 
+  // renderShell wraps any view body with the shared header (brand + nav +
+  // clock + refresh + theme) and the tweaks panel, so every view keeps the
+  // same chrome without duplicating it.
+  const renderShell = (children: React.ReactNode) => (
+    <div className="app">
+      <header className="app-header">
+        <div className="app-header__inner">
+          <a
+            className="brand"
+            href="#"
+            onClick={e => {
+              e.preventDefault();
+              setView({ name: 'dashboard' });
+            }}
+          >
+            <span className="brand__logo">C</span>
+            <span className="brand__name">Claude Code Monitor</span>
+          </a>
+          <nav className="app-nav">
+            <button
+              data-on={view.name === 'dashboard'}
+              onClick={() => setView({ name: 'dashboard' })}
+            >
+              仪表盘
+            </button>
+            <button
+              data-on={view.name !== 'dashboard'}
+              onClick={() => setView({ name: 'sessions' })}
+            >
+              会话
+            </button>
+          </nav>
+          <span className="spacer" />
+          <span className="live-dot">
+            实时同步 ·{' '}
+            {now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <button
+            className="icon-btn"
+            title="刷新"
+            onClick={() => setRefreshKey(k => k + 1)}
+            style={{ animation: refreshing ? 'spin 600ms linear' : 'none' }}
+          >
+            <Icon name="refresh" size={15} />
+          </button>
+          <button
+            className="icon-btn"
+            title={tweaks.dark ? '切换浅色' : '切换深色'}
+            onClick={() => setTweak('dark', !tweaks.dark)}
+          >
+            <Icon name={tweaks.dark ? 'sun' : 'moon'} size={15} />
+          </button>
+        </div>
+      </header>
+
+      {children}
+
+      <TweaksPanel tweaks={tweaks} setTweak={setTweak} />
+    </div>
+  );
+
+  if (view.name === 'sessions') {
+    return renderShell(
+      <SessionsView onOpen={id => setView({ name: 'session', id })} />
+    );
+  }
+  if (view.name === 'session') {
+    return renderShell(
+      <SessionDetailView id={view.id} onBack={() => setView({ name: 'sessions' })} />
+    );
+  }
+
   if (!data) {
-    return (
-      <div className="app">
-        <main className="page">
-          <div className="card">加载中…</div>
-        </main>
-      </div>
+    return renderShell(
+      <main className="page">
+        <div className="card">加载中…</div>
+      </main>
     );
   }
 
@@ -225,38 +281,8 @@ export default function App() {
   const costDelta = pctDelta(data.cost.total, data.cost.prev_total);
   const requestsDelta = pctDelta(data.requests.total, data.requests.prev_total);
 
-  return (
-    <div className="app">
-      <header className="app-header">
-        <div className="app-header__inner">
-          <a className="brand" href="#">
-            <span className="brand__logo">C</span>
-            <span className="brand__name">Claude Code Monitor</span>
-          </a>
-          <span className="spacer" />
-          <span className="live-dot">
-            实时同步 ·{' '}
-            {now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-          </span>
-          <button
-            className="icon-btn"
-            title="刷新"
-            onClick={() => setRefreshKey(k => k + 1)}
-            style={{ animation: refreshing ? 'spin 600ms linear' : 'none' }}
-          >
-            <Icon name="refresh" size={15} />
-          </button>
-          <button
-            className="icon-btn"
-            title={tweaks.dark ? '切换浅色' : '切换深色'}
-            onClick={() => setTweak('dark', !tweaks.dark)}
-          >
-            <Icon name={tweaks.dark ? 'sun' : 'moon'} size={15} />
-          </button>
-        </div>
-      </header>
-
-      <main className="page">
+  return renderShell(
+    <main className="page">
         <div className="page-hero">
           <div>
             <h1>
@@ -562,8 +588,5 @@ export default function App() {
         </section>
 
       </main>
-
-      <TweaksPanel tweaks={tweaks} setTweak={setTweak} />
-    </div>
   );
 }

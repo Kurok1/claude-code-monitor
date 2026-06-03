@@ -953,3 +953,51 @@ body[data-theme="dark"] .heatmap-cell[data-level="0"] { fill: var(--bg-alt); }
 .muted { color: var(--fg-3); }
 .mono { font-family: var(--font-mono); }
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* ── Session views ── */
+.app-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 18px;
+}
+.app-nav button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-3);
+  background: transparent;
+  border: 0;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.app-nav button[data-on='true'] {
+  color: var(--fg-1);
+  background: var(--bg-inset, var(--bg-alt));
+}
+
+.session-row {
+  cursor: pointer;
+}
+.session-row:hover {
+  background: var(--bg-inset, var(--bg-alt));
+}
+.session-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  word-break: break-all;
+}
+
+.back-btn {
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-2);
+  background: transparent;
+  border: 0;
+  padding: 6px 0;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.back-btn:hover {
+  color: var(--fg-1);
+}

@@ -135,3 +135,42 @@ type HeatmapPoint struct {
 	Requests int64   `json:"requests"`
 	Score    float64 `json:"score"`
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Sessions — GET /api/sessions and GET /api/sessions/{id}
+// ─────────────────────────────────────────────────────────────────────
+
+// SessionSummary is one row of the session list. Times are RFC3339 UTC
+// (frontend formats to local). Counts are all-time for that session.
+type SessionSummary struct {
+	SessionID        string `json:"session_id"`
+	FirstActive      string `json:"first_active"`
+	LastActive       string `json:"last_active"`
+	Tokens           int64  `json:"tokens"`
+	Requests         int64  `json:"requests"`
+	ToolCalls        int64  `json:"tool_calls"`
+	SkillActivations int64  `json:"skill_activations"`
+}
+
+// SessionListResponse → GET /api/sessions?limit=
+// Sessions ordered by last activity, most recent first.
+type SessionListResponse struct {
+	UpdatedAt string           `json:"updated_at"`
+	Sessions  []SessionSummary `json:"sessions"`
+}
+
+// SessionDetailResponse → GET /api/sessions/{id}
+// Tools/Skills are the per-session pie data, already folded to Top-N + an
+// aggregated "其他" tail (see bucketToolsTopN / bucketSkillsTopN). The
+// breakdown sums equal ToolCalls / SkillActivations respectively.
+type SessionDetailResponse struct {
+	SessionID        string      `json:"session_id"`
+	FirstActive      string      `json:"first_active"`
+	LastActive       string      `json:"last_active"`
+	Tokens           int64       `json:"tokens"`
+	Requests         int64       `json:"requests"`
+	ToolCalls        int64       `json:"tool_calls"`
+	SkillActivations int64       `json:"skill_activations"`
+	Tools            []ToolRank  `json:"tools"`
+	Skills           []SkillRank `json:"skills"`
+}

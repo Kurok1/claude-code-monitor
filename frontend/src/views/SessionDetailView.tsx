@@ -1,0 +1,176 @@
+/**
+ * @author Kurok1 <im.kurokyhanc@gmail.com>
+ * @since v2.0.0
+ */
+
+import { useEffect, useState } from 'react';
+import { Sessions } from '../api/sessions';
+import type { SessionDetail } from '../api/sessions';
+import { DonutChart } from '../components/charts/DonutChart';
+import { TOOL_PALETTE, SKILL_PALETTE } from '../lib/palette';
+import { formatTokens, formatPct } from '../lib/format';
+
+interface Props {
+  id: string;
+  onBack: () => void;
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="kpi">
+      <div className="kpi__top">
+        <div className="kpi__label">
+          <span>{label}</span>
+        </div>
+      </div>
+      <div className="kpi__value">
+        <span>{value}</span>
+      </div>
+    </div>
+  );
+}
+
+export function SessionDetailView({ id, onBack }: Props) {
+  const [d, setD] = useState<SessionDetail | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setD(null);
+    setErr(null);
+    Sessions.detail(id)
+      .then(r => {
+        if (!cancelled) setD(r);
+      })
+      .catch(e => {
+        if (!cancelled) setErr(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  if (err) {
+    return (
+      <main className="page">
+        <button className="back-btn" onClick={onBack}>← 返回列表</button>
+        <section className="card"><div className="card-sub">加载失败：{err}</div></section>
+      </main>
+    );
+  }
+  if (!d) {
+    return (
+      <main className="page">
+        <button className="back-btn" onClick={onBack}>← 返回列表</button>
+        <section className="card"><div className="card-sub">加载中…</div></section>
+      </main>
+    );
+  }
+
+  const toolsForDonut = d.tools.map((t, i) => ({
+    name: t.name,
+    value: t.count,
+    color: TOOL_PALETTE[i % TOOL_PALETTE.length],
+  }));
+  const skillsForDonut = d.skills.map((s, i) => ({
+    name: s.name,
+    value: s.activations,
+    color: SKILL_PALETTE[i % SKILL_PALETTE.length],
+  }));
+
+  const started = new Date(d.first_active).toLocaleString('zh-CN');
+  const ended = new Date(d.last_active).toLocaleString('zh-CN');
+
+  return (
+    <main className="page">
+      <button className="back-btn" onClick={onBack}>← 返回列表</button>
+
+      <div className="page-hero">
+        <div>
+          <h1>会话详情</h1>
+          <p>
+            <span className="session-id">{d.session_id}</span>
+            <br />
+            {started} → {ended}
+          </p>
+        </div>
+      </div>
+
+      <div className="kpi-grid">
+        <Stat label="Token 用量" value={formatTokens(d.tokens)} />
+        <Stat label="请求次数" value={d.requests.toLocaleString()} />
+        <Stat label="工具调用" value={d.tool_calls.toLocaleString()} />
+        <Stat label="Skill 激活" value={d.skill_activations.toLocaleString()} />
+      </div>
+
+      <div className="cols-2">
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>工具调用次数</h3>
+              <div className="card-sub">{d.tool_calls.toLocaleString()} 次累计</div>
+            </div>
+          </div>
+          {d.tools.length === 0 ? (
+            <div className="card-sub">本会话无工具调用</div>
+          ) : (
+            <div className="rank">
+              <DonutChart
+                data={toolsForDonut}
+                centerLabel="次工具调用"
+                centerValue={formatTokens(d.tool_calls).replace('.0', '')}
+              />
+              <div className="rank-list">
+                {d.tools.map((t, i) => (
+                  <div className="rank-list__row" key={t.name}>
+                    <span className="rank-list__dot" style={{ background: TOOL_PALETTE[i % TOOL_PALETTE.length] }} />
+                    <span className="rank-list__name">{t.name}</span>
+                    <span className="rank-list__count">{t.count.toLocaleString()}</span>
+                    <span className="rank-list__pct">
+                      {formatPct(t.count / (d.tool_calls || 1), 1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>Skill 激活次数</h3>
+              <div className="card-sub">{d.skill_activations.toLocaleString()} 次累计</div>
+            </div>
+          </div>
+          {d.skills.length === 0 ? (
+            <div className="card-sub">本会话无 Skill 激活</div>
+          ) : (
+            <div className="rank">
+              <DonutChart
+                data={skillsForDonut}
+                centerLabel="次激活"
+                centerValue={d.skill_activations.toLocaleString()}
+              />
+              <div className="rank-list">
+                {d.skills.map((s, i) => (
+                  <div className="rank-list__row" key={s.name}>
+                    <span
+                      className="rank-list__dot"
+                      style={{ background: SKILL_PALETTE[i % SKILL_PALETTE.length] }}
+                    />
+                    <span className="rank-list__name">{s.name}</span>
+                    <span className="rank-list__count">{s.activations.toLocaleString()}</span>
+                    <span className="rank-list__pct">
+                      {formatPct(s.activations / (d.skill_activations || 1), 1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
