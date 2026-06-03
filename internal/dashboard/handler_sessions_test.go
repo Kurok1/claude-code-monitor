@@ -2,7 +2,7 @@ package dashboard
 
 /**
  * @author Kurok1 <im.kurokyhanc@gmail.com>
- * @since v1.8.0
+ * @since v2.0.0
  */
 
 import (

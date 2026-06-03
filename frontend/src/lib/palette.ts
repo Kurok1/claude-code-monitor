@@ -1,6 +1,6 @@
 /**
  * @author Kurok1 <im.kurokyhanc@gmail.com>
- * @since v1.8.0
+ * @since v2.0.0
  */
 
 // Shared donut/legend palettes for the tool-call and skill-activation charts,
