@@ -442,3 +442,167 @@ func nullableTime(t time.Time) any {
 	}
 	return t
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Sessions
+//
+// The "activity union" below is the set of tables whose `ts` defines
+// session activity for first/last-seen and the recent-sessions ordering. We
+// union the high-signal tables (every API turn, every tool result, every
+// skill activation, every prompt, plus the token metric). metric_session_count
+// is intentionally excluded — a session may have several start rows, and we
+// want activity recency, not session-start recency.
+// ─────────────────────────────────────────────────────────────────────
+
+// QuerySessionTimespan returns the first/last activity instants for one
+// session. Both are invalid (NULL) when the session id is unknown — callers
+// treat that as 404.
+func QuerySessionTimespan(ctx context.Context, db *sql.DB, sessionID string) (first, last sql.NullTime, err error) {
+	const q = `
+		WITH activity AS (
+		  SELECT ts FROM event_api_request      WHERE session_id = ?
+		  UNION ALL SELECT ts FROM event_tool_result     WHERE session_id = ?
+		  UNION ALL SELECT ts FROM event_skill_activated WHERE session_id = ?
+		  UNION ALL SELECT ts FROM event_user_prompt     WHERE session_id = ?
+		  UNION ALL SELECT ts FROM metric_token_usage    WHERE session_id = ?
+		)
+		SELECT MIN(ts), MAX(ts) FROM activity
+	`
+	row := db.QueryRowContext(ctx, q, sessionID, sessionID, sessionID, sessionID, sessionID)
+	if err = row.Scan(&first, &last); err != nil {
+		return first, last, fmt.Errorf("query session timespan: %w", err)
+	}
+	return first, last, nil
+}
+
+// QuerySessionTokens returns total tokens (all types) for one session.
+func QuerySessionTokens(ctx context.Context, db *sql.DB, sessionID string) (int64, error) {
+	const q = `SELECT COALESCE(SUM(value), 0) FROM metric_token_usage WHERE session_id = ?`
+	var v int64
+	if err := db.QueryRowContext(ctx, q, sessionID).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query session tokens: %w", err)
+	}
+	return v, nil
+}
+
+// QuerySessionRequests returns the API-request count for one session.
+func QuerySessionRequests(ctx context.Context, db *sql.DB, sessionID string) (int64, error) {
+	const q = `SELECT COUNT(*) FROM event_api_request WHERE session_id = ?`
+	var v int64
+	if err := db.QueryRowContext(ctx, q, sessionID).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query session requests: %w", err)
+	}
+	return v, nil
+}
+
+// QuerySessionToolBreakdown returns every tool's call count for one session,
+// ordered by count desc. The builder folds the tail past Top-N into "其他".
+func QuerySessionToolBreakdown(ctx context.Context, db *sql.DB, sessionID string) ([]ToolRank, error) {
+	const q = `
+		SELECT tool_name AS name, COUNT(*) AS count
+		FROM event_tool_result
+		WHERE session_id = ? AND tool_name IS NOT NULL
+		GROUP BY tool_name
+		ORDER BY count DESC, name
+	`
+	rows, err := db.QueryContext(ctx, q, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query session tool breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ToolRank
+	for rows.Next() {
+		var r ToolRank
+		if err := rows.Scan(&r.Name, &r.Count); err != nil {
+			return nil, fmt.Errorf("scan session tool: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QuerySessionSkillBreakdown returns every skill's activation count for one
+// session, ordered by count desc.
+func QuerySessionSkillBreakdown(ctx context.Context, db *sql.DB, sessionID string) ([]SkillRank, error) {
+	const q = `
+		SELECT skill_name AS name, COUNT(*) AS activations
+		FROM event_skill_activated
+		WHERE session_id = ? AND skill_name IS NOT NULL
+		GROUP BY skill_name
+		ORDER BY activations DESC, name
+	`
+	rows, err := db.QueryContext(ctx, q, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query session skill breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SkillRank
+	for rows.Next() {
+		var r SkillRank
+		if err := rows.Scan(&r.Name, &r.Activations); err != nil {
+			return nil, fmt.Errorf("scan session skill: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// sessionListRow is the raw per-session aggregate scanned from QuerySessionList;
+// BuildSessionList formats the timestamps into the wire SessionSummary.
+type sessionListRow struct {
+	SessionID string
+	FirstTs   time.Time
+	LastTs    time.Time
+	Tokens    int64
+	Requests  int64
+	ToolCalls int64
+	Skills    int64
+}
+
+// QuerySessionList returns the `limit` most-recently-active sessions ordered
+// by last activity desc, each with all-time aggregate counts. The correlated
+// subqueries run only for the `limit` rows that survive the activity-union
+// ordering, so cost scales with `limit`, not table size.
+func QuerySessionList(ctx context.Context, db *sql.DB, limit int) ([]sessionListRow, error) {
+	const q = `
+		WITH activity AS (
+		  SELECT session_id, ts FROM event_api_request      WHERE session_id IS NOT NULL
+		  UNION ALL SELECT session_id, ts FROM event_tool_result     WHERE session_id IS NOT NULL
+		  UNION ALL SELECT session_id, ts FROM event_skill_activated WHERE session_id IS NOT NULL
+		  UNION ALL SELECT session_id, ts FROM event_user_prompt     WHERE session_id IS NOT NULL
+		  UNION ALL SELECT session_id, ts FROM metric_token_usage    WHERE session_id IS NOT NULL
+		),
+		sess AS (
+		  SELECT session_id, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+		  FROM activity
+		  GROUP BY session_id
+		  ORDER BY last_ts DESC
+		  LIMIT ?
+		)
+		SELECT
+		  s.session_id, s.first_ts, s.last_ts,
+		  COALESCE((SELECT SUM(value) FROM metric_token_usage  t  WHERE t.session_id  = s.session_id), 0) AS tokens,
+		  (SELECT COUNT(*) FROM event_api_request      r  WHERE r.session_id  = s.session_id) AS requests,
+		  (SELECT COUNT(*) FROM event_tool_result      tr WHERE tr.session_id = s.session_id) AS tool_calls,
+		  (SELECT COUNT(*) FROM event_skill_activated  sk WHERE sk.session_id = s.session_id) AS skills
+		FROM sess s
+		ORDER BY s.last_ts DESC
+	`
+	rows, err := db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query session list: %w", err)
+	}
+	defer rows.Close()
+
+	var out []sessionListRow
+	for rows.Next() {
+		var r sessionListRow
+		if err := rows.Scan(&r.SessionID, &r.FirstTs, &r.LastTs, &r.Tokens, &r.Requests, &r.ToolCalls, &r.Skills); err != nil {
+			return nil, fmt.Errorf("scan session list row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
