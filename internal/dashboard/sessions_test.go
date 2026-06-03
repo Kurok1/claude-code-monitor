@@ -78,6 +78,95 @@ func TestQuerySessionAggregations(t *testing.T) {
 	}
 }
 
+func TestBuildSessionDetail_BucketsTail(t *testing.T) {
+	db, w, _ := testDB(t)
+	base := w.TodayStartUTC.Add(time.Hour)
+
+	// 5 distinct tools with descending counts: 5,4,3,2,1.
+	counts := map[string]int{"Bash": 5, "Read": 4, "Edit": 3, "Write": 2, "Grep": 1}
+	for name, n := range counts {
+		for i := 0; i < n; i++ {
+			insertSessionTool(t, db, "sess-X", base, name)
+		}
+	}
+	insertSessionRow(t, db, "event_api_request", "sess-X", base)
+
+	// Top-2 tools → Bash(5), Read(4); the rest (3+2+1=6) fold into "其他".
+	resp, found, err := BuildSessionDetail(context.Background(), db, "sess-X", 2, 10)
+	if err != nil {
+		t.Fatalf("BuildSessionDetail: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected found=true")
+	}
+	if resp.ToolCalls != 15 {
+		t.Errorf("ToolCalls = %d, want 15", resp.ToolCalls)
+	}
+	if len(resp.Tools) != 3 {
+		t.Fatalf("Tools = %+v, want 3 (2 + 其他)", resp.Tools)
+	}
+	if resp.Tools[0].Name != "Bash" || resp.Tools[1].Name != "Read" {
+		t.Errorf("top tools = %+v", resp.Tools)
+	}
+	if resp.Tools[2].Name != "其他" || resp.Tools[2].Count != 6 {
+		t.Errorf("bucket = %+v, want 其他=6", resp.Tools[2])
+	}
+	if resp.Requests != 1 {
+		t.Errorf("Requests = %d, want 1", resp.Requests)
+	}
+
+	// Unknown session → found=false.
+	_, found, err = BuildSessionDetail(context.Background(), db, "ghost", 10, 10)
+	if err != nil {
+		t.Fatalf("BuildSessionDetail unknown: %v", err)
+	}
+	if found {
+		t.Errorf("expected found=false for unknown session")
+	}
+}
+
+func TestBuildSessionList_OrdersByLastActivity(t *testing.T) {
+	db, w, _ := testDB(t)
+	t0 := w.TodayStartUTC.Add(time.Hour)
+
+	// Three sessions, increasing recency: old < mid < new.
+	insertSessionRow(t, db, "event_api_request", "old", t0)
+	insertSessionRow(t, db, "event_api_request", "mid", t0.Add(time.Hour))
+	insertSessionTool(t, db, "mid", t0.Add(2*time.Hour), "Read") // mid's last activity
+	insertSessionRow(t, db, "event_api_request", "new", t0.Add(3*time.Hour))
+	insertSessionTokenUsage(t, db, "new", t0.Add(3*time.Hour), 500)
+
+	resp, err := BuildSessionList(context.Background(), db, 30)
+	if err != nil {
+		t.Fatalf("BuildSessionList: %v", err)
+	}
+	if len(resp.Sessions) != 3 {
+		t.Fatalf("got %d sessions, want 3", len(resp.Sessions))
+	}
+	if resp.Sessions[0].SessionID != "new" || resp.Sessions[2].SessionID != "old" {
+		t.Errorf("order = %s,%s,%s; want new,mid,old",
+			resp.Sessions[0].SessionID, resp.Sessions[1].SessionID, resp.Sessions[2].SessionID)
+	}
+	if resp.Sessions[0].Tokens != 500 || resp.Sessions[0].Requests != 1 {
+		t.Errorf("new summary = %+v", resp.Sessions[0])
+	}
+	if resp.Sessions[1].ToolCalls != 1 {
+		t.Errorf("mid tool_calls = %d, want 1", resp.Sessions[1].ToolCalls)
+	}
+	if resp.Sessions[0].FirstActive == "" || resp.Sessions[0].LastActive == "" {
+		t.Errorf("timestamps not formatted: %+v", resp.Sessions[0])
+	}
+
+	// limit clamps the row count.
+	resp, err = BuildSessionList(context.Background(), db, 2)
+	if err != nil {
+		t.Fatalf("BuildSessionList limit: %v", err)
+	}
+	if len(resp.Sessions) != 2 || resp.Sessions[0].SessionID != "new" {
+		t.Errorf("limited = %+v", resp.Sessions)
+	}
+}
+
 // ── session-scoped insert helpers ───────────────────────────────────────
 // The shared helpers in queries_test.go don't set session_id; these do.
 
