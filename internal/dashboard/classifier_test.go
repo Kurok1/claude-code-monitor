@@ -20,6 +20,11 @@ func TestClassifier_BuiltinClaude(t *testing.T) {
 		{"claude-sonnet-4-6", "sonnet-4.6"},
 		{"claude-haiku-4-5-20251001", "haiku-4.5"},
 		{"Claude-Opus-4-7", "opus-4.7"}, // case-insensitive
+		// Fable uses a single-segment version (`claude-fable-5`), no MAJOR-MINOR.
+		{"claude-fable-5", "fable-5"},
+		{"claude-fable-5[1m]", "fable-5"},      // [1m] context suffix stripped
+		{"claude-fable-5-1", "fable-5.1"},      // hypothetical minor release
+		{"claude-fable-5-20260601", "fable-5"}, // date snapshot must not read as minor
 	}
 	for _, tc := range cases {
 		if got := c.Classify(tc.in); got != tc.want {

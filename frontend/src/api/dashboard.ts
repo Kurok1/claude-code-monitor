@@ -116,12 +116,15 @@ const PALETTE = [
 ];
 
 const CLAUDE_TIER: Record<string, string> = {
+  fable: '顶级 · 最强推理',
   opus: '旗舰 · 复杂推理',
   sonnet: '主力 · 编码 / Agent',
   haiku: '轻量 · 快速 / 大批量',
 };
 
-const CLAUDE_GROUP_RE = /^(opus|sonnet|haiku)-(\d+\.\d+)$/;
+// Minor version is optional: Fable ids are single-segment (`fable-5`),
+// opus/sonnet/haiku stay `family-MAJOR.MINOR`.
+const CLAUDE_GROUP_RE = /^(opus|sonnet|haiku|fable)-(\d+(?:\.\d+)?)$/;
 
 // Stable hash for deterministic color assignment. Same group string always
 // produces the same palette slot across reloads.

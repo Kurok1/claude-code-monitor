@@ -8,11 +8,14 @@ import (
 	"github.com/kuroky/claude-code-monitor/internal/config"
 )
 
-// defaultClaudeRule matches `claude-(opus|sonnet|haiku)-MAJOR-MINOR` with any
-// suffix (date snapshot, `[1m]`, etc.) and lets the classifier collapse
-// versioned snapshots into a single `family-MAJOR.MINOR` bucket. It runs
-// only when no user-defined rule matches first.
-var defaultClaudeRule = regexp.MustCompile(`(?i)^claude-(opus|sonnet|haiku)-(\d+)-(\d+)`)
+// defaultClaudeRule matches `claude-(opus|sonnet|haiku|fable)-MAJOR[-MINOR]`
+// with any suffix (date snapshot, `[1m]`, etc.) and lets the classifier
+// collapse versioned snapshots into a single `family-MAJOR[.MINOR]` bucket.
+// MINOR is optional because Fable-style ids carry a single version segment
+// (`claude-fable-5`); it is capped at two digits with a non-digit boundary so
+// an 8-digit date snapshot is never misread as a minor version. It runs only
+// when no user-defined rule matches first.
+var defaultClaudeRule = regexp.MustCompile(`(?i)^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2})(?:\D|$))?`)
 
 // Classifier maps a raw OTLP model attribute (e.g. `claude-opus-4-7[1m]`,
 // `deepseek-v3`) to a stable group key used for dashboard aggregation.
@@ -58,6 +61,9 @@ func (c *Classifier) Classify(model string) string {
 		}
 	}
 	if m := defaultClaudeRule.FindStringSubmatch(model); m != nil {
+		if m[3] == "" {
+			return fmt.Sprintf("%s-%s", strings.ToLower(m[1]), m[2])
+		}
 		return fmt.Sprintf("%s-%s.%s", strings.ToLower(m[1]), m[2], m[3])
 	}
 	return model
