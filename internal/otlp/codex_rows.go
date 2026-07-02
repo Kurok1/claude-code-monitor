@@ -62,6 +62,7 @@ type CodexEventTokenUsageRow struct {
 	ServiceTier          sql.NullString
 	ModelReasoningEffort sql.NullString
 	DurationMs           sql.NullInt64
+	CostUsd              sql.NullFloat64 // estimated at ingest by internal/pricing; NULL when unpriced/disabled
 }
 
 type CodexEventUserPromptRow struct {
