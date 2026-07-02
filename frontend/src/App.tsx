@@ -94,7 +94,10 @@ function KpiCard({ icon, label, value, unit, delta, foot, sparkValues, sparkColo
 // Client-side view selector (no router): the dashboard, the session list, or
 // one session's detail. Navigation is plain state — URLs are not deep-linkable
 // in this first cut.
-type View = { name: 'dashboard' } | { name: 'sessions' } | { name: 'session'; id: string };
+type View =
+  | { name: 'dashboard' }
+  | { name: 'sessions' }
+  | { name: 'session'; id: string; client: 'claude' | 'codex' };
 
 export default function App() {
   const [tweaks, setTweak] = useTweaks();
@@ -225,12 +228,19 @@ export default function App() {
 
   if (view.name === 'sessions') {
     return renderShell(
-      <SessionsView onOpen={id => setView({ name: 'session', id })} />
+      <SessionsView
+        client={client}
+        onOpen={(id, c) => setView({ name: 'session', id, client: c })}
+      />
     );
   }
   if (view.name === 'session') {
     return renderShell(
-      <SessionDetailView id={view.id} onBack={() => setView({ name: 'sessions' })} />
+      <SessionDetailView
+        id={view.id}
+        client={view.client}
+        onBack={() => setView({ name: 'sessions' })}
+      />
     );
   }
 

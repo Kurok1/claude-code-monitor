@@ -18,16 +18,18 @@ function fmtTime(iso: string): string {
 }
 
 interface Props {
-  onOpen: (id: string) => void;
+  client: 'all' | 'claude' | 'codex';
+  onOpen: (id: string, client: 'claude' | 'codex') => void;
 }
 
-export function SessionsView({ onOpen }: Props) {
+export function SessionsView({ client, onOpen }: Props) {
   const [rows, setRows] = useState<SessionSummary[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    Sessions.list(50)
+    setRows(null);
+    Sessions.list(50, client)
       .then(r => {
         if (!cancelled) setRows(r.sessions);
       })
@@ -37,7 +39,7 @@ export function SessionsView({ onOpen }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [client]);
 
   return (
     <main className="page">
@@ -67,11 +69,14 @@ export function SessionsView({ onOpen }: Props) {
             <tbody>
               {rows.map(s => (
                 <tr
-                  key={s.session_id}
+                  key={`${s.client}:${s.session_id}`}
                   className="session-row"
-                  onClick={() => onOpen(s.session_id)}
+                  onClick={() => onOpen(s.session_id, s.client)}
                 >
                   <td>
+                    <span className={`client-badge client-badge--${s.client}`}>
+                      {s.client === 'codex' ? 'Codex' : 'Claude'}
+                    </span>
                     <span className="session-id">{s.session_id}</span>
                   </td>
                   <td className="num">{s.requests.toLocaleString()}</td>
