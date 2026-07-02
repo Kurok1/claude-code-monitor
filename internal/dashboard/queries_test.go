@@ -111,14 +111,14 @@ func TestQueryPeriodTokens_Day(t *testing.T) {
 	// Yesterday — counted in prev window only.
 	insertTokenUsage(t, db, spec.PreviousStart.Add(time.Hour), "claude-opus-4-1", "input", 999)
 
-	got, err := QueryPeriodTokens(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	got, err := QueryPeriodTokens(context.Background(), db, ClientAll, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		t.Fatalf("QueryPeriodTokens: %v", err)
 	}
 	if got.In != 100 || got.Out != 50 || got.Total != 180 {
 		t.Errorf("got %+v, want in=100 out=50 total=180", got)
 	}
-	prev, err := QueryPeriodTokensTotal(context.Background(), db, spec.PreviousStart, spec.PreviousEnd)
+	prev, err := QueryPeriodTokensTotal(context.Background(), db, ClientAll, spec.PreviousStart, spec.PreviousEnd)
 	if err != nil {
 		t.Fatalf("QueryPeriodTokensTotal: %v", err)
 	}
@@ -141,11 +141,11 @@ func TestQueryPeriodTokens_Week(t *testing.T) {
 	// Way out of range
 	insertTokenUsage(t, db, spec.PreviousStart.Add(-24*time.Hour), "claude-opus-4-1", "input", 999)
 
-	got, _ := QueryPeriodTokens(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	got, _ := QueryPeriodTokens(context.Background(), db, ClientAll, spec.CurrentStart, spec.CurrentEnd)
 	if got.In != 200 {
 		t.Errorf("week.In = %d, want 200", got.In)
 	}
-	prev, _ := QueryPeriodTokensTotal(context.Background(), db, spec.PreviousStart, spec.PreviousEnd)
+	prev, _ := QueryPeriodTokensTotal(context.Background(), db, ClientAll, spec.PreviousStart, spec.PreviousEnd)
 	if prev != 500 {
 		t.Errorf("week.Prev = %d, want 500", prev)
 	}
@@ -160,11 +160,11 @@ func TestQueryPeriodTokens_Month(t *testing.T) {
 	insertTokenUsage(t, db, spec.PreviousStart.Add(5*24*time.Hour), "claude-opus-4-1", "input", 1000)
 	insertTokenUsage(t, db, spec.PreviousStart.Add(-24*time.Hour), "claude-opus-4-1", "input", 999)
 
-	got, _ := QueryPeriodTokens(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	got, _ := QueryPeriodTokens(context.Background(), db, ClientAll, spec.CurrentStart, spec.CurrentEnd)
 	if got.In != 700 {
 		t.Errorf("month.In = %d, want 700", got.In)
 	}
-	prev, _ := QueryPeriodTokensTotal(context.Background(), db, spec.PreviousStart, spec.PreviousEnd)
+	prev, _ := QueryPeriodTokensTotal(context.Background(), db, ClientAll, spec.PreviousStart, spec.PreviousEnd)
 	if prev != 1000 {
 		t.Errorf("month.Prev = %d, want 1000", prev)
 	}
@@ -179,7 +179,7 @@ func TestQueryTokensSparkline_LocalDayBucketing(t *testing.T) {
 	insertTokenUsage(t, db, spec.CurrentStart.Add(-5*24*time.Hour).Add(time.Hour),
 		"claude-opus-4-1", "output", 22)
 
-	got, err := QueryTokensSparkline(context.Background(), db, w, "day",
+	got, err := QueryTokensSparkline(context.Background(), db, ClientAll, w, "day",
 		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		t.Fatalf("QueryTokensSparkline: %v", err)
@@ -208,7 +208,7 @@ func TestQueryTokensSparkline_WeekGrain(t *testing.T) {
 	insertTokenUsage(t, db, spec.CurrentStart.Add(-2*7*24*time.Hour).Add(time.Hour),
 		"claude-opus-4-1", "input", 21)
 
-	got, _ := QueryTokensSparkline(context.Background(), db, w, "week",
+	got, _ := QueryTokensSparkline(context.Background(), db, ClientAll, w, "week",
 		spec.SparklineStart, spec.PeriodEnd)
 	if len(got) != 3 {
 		t.Fatalf("len(week buckets) = %d, want 3: %+v", len(got), got)
@@ -223,7 +223,7 @@ func TestQueryPeriodCost(t *testing.T) {
 	insertCostUsage(t, db, spec.CurrentStart.Add(2*24*time.Hour), "claude-sonnet-4-5", 0.75)
 	insertCostUsage(t, db, spec.PreviousStart.Add(24*time.Hour), "claude-opus-4-1", 99.0)
 
-	got, err := QueryPeriodCost(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	got, err := QueryPeriodCost(context.Background(), db, ClientAll, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		t.Fatalf("QueryPeriodCost: %v", err)
 	}
@@ -242,12 +242,12 @@ func TestQueryPeriodCache(t *testing.T) {
 	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "input", 999)
 	insertTokenUsage(t, db, spec.CurrentStart.Add(time.Hour), "claude-opus-4-1", "output", 999)
 
-	read, creation, err := QueryPeriodCache(context.Background(), db, spec.CurrentStart, spec.CurrentEnd)
+	pc, err := QueryPeriodCache(context.Background(), db, ClientAll, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		t.Fatalf("QueryPeriodCache: %v", err)
 	}
-	if read != 80 || creation != 20 {
-		t.Errorf("read=%d creation=%d, want 80/20", read, creation)
+	if pc.Read != 80 || pc.Creation != 20 || pc.HitDenom != 100 {
+		t.Errorf("got %+v, want read=80 creation=20 denom=100", pc)
 	}
 }
 
@@ -265,7 +265,7 @@ func TestCacheHitRate(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := cacheHitRate(c.read, c.creation)
+			got := hitRateFrom(periodCache{Read: c.read, Creation: c.creation, HitDenom: c.read + c.creation})
 			if c.wantNil {
 				if got != nil {
 					t.Errorf("got %v, want nil", *got)

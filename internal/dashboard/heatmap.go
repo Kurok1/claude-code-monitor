@@ -28,15 +28,15 @@ func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights Heatmap
 
 	start, end := w.HeatmapStartUTC, w.TodayEndUTC
 
-	tokBuckets, err := QueryTokensSparkline(ctx, db, w, "day", start, end)
+	tokBuckets, err := QueryTokensSparkline(ctx, db, ClientAll, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}
-	costBuckets, err := QueryCostSparkline(ctx, db, w, "day", start, end)
+	costBuckets, err := QueryCostSparkline(ctx, db, ClientAll, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}
-	reqBuckets, err := QueryRequestsSparkline(ctx, db, w, "day", start, end)
+	reqBuckets, err := QueryRequestsSparkline(ctx, db, ClientAll, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}

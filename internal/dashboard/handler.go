@@ -67,13 +67,18 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if rng == "" {
 		rng = "day"
 	}
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
 	if err != nil {
 		h.log.Error("snapshot: build time window", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng)
+	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng, client)
 	if err != nil {
 		if isUserError(err) {
 			writeError(w, http.StatusBadRequest, err.Error())

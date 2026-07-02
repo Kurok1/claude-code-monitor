@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -34,97 +35,148 @@ type periodTokens struct {
 	Total int64
 }
 
-// QueryPeriodTokens — totals for [start, end). Used both for current and previous.
-func QueryPeriodTokens(ctx context.Context, db *sql.DB, start, end time.Time) (periodTokens, error) {
+// QueryPeriodTokens — totals for [start, end), summed across the requested
+// client arms. Codex projection: in = input - cached (non-cache input, so the
+// split is comparable with Claude's), total = input + output (cached and
+// reasoning are subsets and must not be re-added).
+func QueryPeriodTokens(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (periodTokens, error) {
 	var r periodTokens
-	const q = `
-		SELECT
-		  COALESCE(SUM(CASE WHEN type='input'  THEN value END), 0) AS tokens_in,
-		  COALESCE(SUM(CASE WHEN type='output' THEN value END), 0) AS tokens_out,
-		  COALESCE(SUM(value), 0)                                   AS tokens_total
-		FROM metric_token_usage
-		WHERE ts >= ? AND ts < ?
-	`
-	err := db.QueryRowContext(ctx, q, start, end).Scan(&r.In, &r.Out, &r.Total)
-	if err != nil {
-		return r, fmt.Errorf("query period tokens: %w", err)
+	if client.includesClaude() {
+		const q = `
+			SELECT
+			  COALESCE(SUM(CASE WHEN type='input'  THEN value END), 0) AS tokens_in,
+			  COALESCE(SUM(CASE WHEN type='output' THEN value END), 0) AS tokens_out,
+			  COALESCE(SUM(value), 0)                                   AS tokens_total
+			FROM metric_token_usage
+			WHERE ts >= ? AND ts < ?
+		`
+		var c periodTokens
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.In, &c.Out, &c.Total); err != nil {
+			return r, fmt.Errorf("query period tokens (claude): %w", err)
+		}
+		r.In += c.In
+		r.Out += c.Out
+		r.Total += c.Total
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT
+			  COALESCE(SUM(COALESCE(input_token_count, 0) - COALESCE(cached_token_count, 0)), 0),
+			  COALESCE(SUM(COALESCE(output_token_count, 0)), 0),
+			  COALESCE(SUM(COALESCE(input_token_count, 0) + COALESCE(output_token_count, 0)), 0)
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+		`
+		var c periodTokens
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.In, &c.Out, &c.Total); err != nil {
+			return r, fmt.Errorf("query period tokens (codex): %w", err)
+		}
+		r.In += c.In
+		r.Out += c.Out
+		r.Total += c.Total
 	}
 	return r, nil
 }
 
-// QueryPeriodTokensTotal — just the SUM(value). Convenience for prev-period
-// when we don't need the in/out split.
-func QueryPeriodTokensTotal(ctx context.Context, db *sql.DB, start, end time.Time) (int64, error) {
-	const q = `
-		SELECT COALESCE(SUM(value), 0)
-		FROM metric_token_usage
-		WHERE ts >= ? AND ts < ?
-	`
-	var v int64
-	err := db.QueryRowContext(ctx, q, start, end).Scan(&v)
+// QueryPeriodTokensTotal — just the merged total (prev-period convenience).
+func QueryPeriodTokensTotal(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (int64, error) {
+	r, err := QueryPeriodTokens(ctx, db, client, start, end)
 	if err != nil {
-		return 0, fmt.Errorf("query period tokens total: %w", err)
+		return 0, err
 	}
-	return v, nil
+	return r.Total, nil
 }
 
-// QueryPeriodCost — total cost in [start, end).
-func QueryPeriodCost(ctx context.Context, db *sql.DB, start, end time.Time) (float64, error) {
+// QueryPeriodCost — total cost in [start, end). Codex has no cost data, so
+// only the Claude arm exists; ClientCodex always returns 0.
+func QueryPeriodCost(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (float64, error) {
+	if !client.includesClaude() {
+		return 0, nil
+	}
 	const q = `
 		SELECT COALESCE(SUM(value), 0)
 		FROM metric_cost_usage
 		WHERE ts >= ? AND ts < ?
 	`
 	var v float64
-	err := db.QueryRowContext(ctx, q, start, end).Scan(&v)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
 		return 0, fmt.Errorf("query period cost: %w", err)
 	}
 	return v, nil
 }
 
-// QueryPeriodCache — cache read/creation tokens in [start, end).
+// periodCache carries cache KPIs with an explicit hit-rate denominator,
+// because the two families define the rate differently:
+//   - Claude: read / (read + creation) — fraction of cache-touched tokens
+//   - Codex:  cached / input           — fraction of input served from cache
 //
-// Hit rate is computed by the caller as
-//
-//	cacheRead / (cacheRead + cacheCreation)
-//
-// — the fraction of cache-touched tokens that came from a hit rather than
-// a (re)write. Plain `input` tokens are excluded from both numerator and
-// denominator because they are unrelated to caching (counting them would
-// conflate "no caching used" with "cache miss").
-//
-// When read == 0 && creation == 0 the caller treats the rate as N/A and
-// surfaces null in the API response.
-func QueryPeriodCache(ctx context.Context, db *sql.DB, start, end time.Time) (read, creation int64, err error) {
-	const q = `
-		SELECT
-		  COALESCE(SUM(CASE WHEN type='cacheRead'     THEN value END), 0) AS read_tokens,
-		  COALESCE(SUM(CASE WHEN type='cacheCreation' THEN value END), 0) AS creation_tokens
-		FROM metric_token_usage
-		WHERE ts >= ? AND ts < ?
-		  AND type IN ('cacheRead', 'cacheCreation')
-	`
-	err = db.QueryRowContext(ctx, q, start, end).Scan(&read, &creation)
-	if err != nil {
-		return 0, 0, fmt.Errorf("query period cache: %w", err)
-	}
-	return read, creation, nil
+// The merged rate is Read / HitDenom with both sides accumulated.
+type periodCache struct {
+	Read     int64
+	Creation int64
+	HitDenom int64
 }
 
-// QueryPeriodRequests — count of API requests in [start, end).
-func QueryPeriodRequests(ctx context.Context, db *sql.DB, start, end time.Time) (int64, error) {
-	const q = `
-		SELECT COUNT(*)
-		FROM event_api_request
-		WHERE ts >= ? AND ts < ?
-	`
-	var v int64
-	err := db.QueryRowContext(ctx, q, start, end).Scan(&v)
-	if err != nil {
-		return 0, fmt.Errorf("query period requests: %w", err)
+// QueryPeriodCache — cache stats in [start, end) across the requested arms.
+func QueryPeriodCache(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (periodCache, error) {
+	var pc periodCache
+	if client.includesClaude() {
+		const q = `
+			SELECT
+			  COALESCE(SUM(CASE WHEN type='cacheRead'     THEN value END), 0) AS read_tokens,
+			  COALESCE(SUM(CASE WHEN type='cacheCreation' THEN value END), 0) AS creation_tokens
+			FROM metric_token_usage
+			WHERE ts >= ? AND ts < ?
+			  AND type IN ('cacheRead', 'cacheCreation')
+		`
+		var read, creation int64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&read, &creation); err != nil {
+			return pc, fmt.Errorf("query period cache (claude): %w", err)
+		}
+		pc.Read += read
+		pc.Creation += creation
+		pc.HitDenom += read + creation
 	}
-	return v, nil
+	if client.includesCodex() {
+		const q = `
+			SELECT
+			  COALESCE(SUM(COALESCE(cached_token_count, 0)), 0),
+			  COALESCE(SUM(COALESCE(input_token_count, 0)), 0)
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+		`
+		var cached, input int64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&cached, &input); err != nil {
+			return pc, fmt.Errorf("query period cache (codex): %w", err)
+		}
+		pc.Read += cached
+		pc.HitDenom += input
+	}
+	return pc, nil
+}
+
+// QueryPeriodRequests — API request count. Codex counts response.completed
+// rows (codex_event_token_usage), NOT codex_event_api_request (attempt grain,
+// includes retries).
+func QueryPeriodRequests(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (int64, error) {
+	var total int64
+	if client.includesClaude() {
+		const q = `SELECT COUNT(*) FROM event_api_request WHERE ts >= ? AND ts < ?`
+		var v int64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
+			return 0, fmt.Errorf("query period requests (claude): %w", err)
+		}
+		total += v
+	}
+	if client.includesCodex() {
+		const q = `SELECT COUNT(*) FROM codex_event_token_usage WHERE ts >= ? AND ts < ?`
+		var v int64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
+			return 0, fmt.Errorf("query period requests (codex): %w", err)
+		}
+		total += v
+	}
+	return total, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -136,33 +188,60 @@ type periodBucket struct {
 	Total  int64
 }
 
-// QueryTokensSparkline — bucketed total tokens. Caller pads missing buckets.
-func QueryTokensSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain string, start, end time.Time) ([]periodBucket, error) {
-	q := fmt.Sprintf(`
-		SELECT
-		  CAST(%s AS DATE) AS bucket,
-		  SUM(value)       AS total
-		FROM metric_token_usage
-		WHERE ts >= ? AND ts < ?
-		GROUP BY 1
-		ORDER BY 1
-	`, localGrainExpr(w, "ts", grain))
-
-	rows, err := db.QueryContext(ctx, q, start, end)
+// runBucketQuery executes one arm's bucketed query and folds rows into acc.
+func runBucketQuery(ctx context.Context, db *sql.DB, q string, acc map[time.Time]int64, label string, args ...any) error {
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query tokens sparkline: %w", err)
+		return fmt.Errorf("query %s: %w", label, err)
 	}
 	defer rows.Close()
-
-	var out []periodBucket
 	for rows.Next() {
 		var b periodBucket
 		if err := rows.Scan(&b.Bucket, &b.Total); err != nil {
-			return nil, fmt.Errorf("scan tokens sparkline: %w", err)
+			return fmt.Errorf("scan %s: %w", label, err)
 		}
-		out = append(out, b)
+		acc[b.Bucket.UTC()] = acc[b.Bucket.UTC()] + b.Total
 	}
-	return out, rows.Err()
+	return rows.Err()
+}
+
+func bucketsFromMap(acc map[time.Time]int64) []periodBucket {
+	out := make([]periodBucket, 0, len(acc))
+	for k, v := range acc {
+		out = append(out, periodBucket{Bucket: k, Total: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bucket.Before(out[j].Bucket) })
+	return out
+}
+
+// QueryTokensSparkline — bucketed total tokens across the requested arms.
+// Caller pads missing buckets.
+func QueryTokensSparkline(ctx context.Context, db *sql.DB, client Client, w TimeWindow, grain string, start, end time.Time) ([]periodBucket, error) {
+	acc := map[time.Time]int64{}
+	if client.includesClaude() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket, SUM(value) AS total
+			FROM metric_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if err := runBucketQuery(ctx, db, q, acc, "tokens sparkline (claude)", start, end); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket,
+			       SUM(COALESCE(input_token_count, 0) + COALESCE(output_token_count, 0)) AS total
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if err := runBucketQuery(ctx, db, q, acc, "tokens sparkline (codex)", start, end); err != nil {
+			return nil, err
+		}
+	}
+	return bucketsFromMap(acc), nil
 }
 
 type periodCostBucket struct {
@@ -170,8 +249,11 @@ type periodCostBucket struct {
 	Cost   float64
 }
 
-// QueryCostSparkline — bucketed total cost.
-func QueryCostSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain string, start, end time.Time) ([]periodCostBucket, error) {
+// QueryCostSparkline — bucketed total cost. Claude-only: codex has no cost.
+func QueryCostSparkline(ctx context.Context, db *sql.DB, client Client, w TimeWindow, grain string, start, end time.Time) ([]periodCostBucket, error) {
+	if !client.includesClaude() {
+		return nil, nil
+	}
 	q := fmt.Sprintf(`
 		SELECT
 		  CAST(%s AS DATE) AS bucket,
@@ -199,34 +281,33 @@ func QueryCostSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain str
 	return out, rows.Err()
 }
 
-// QueryRequestsSparkline — bucketed request counts. Reuses periodBucket so
-// the caller can pad with fillTokensSparkline.
-func QueryRequestsSparkline(ctx context.Context, db *sql.DB, w TimeWindow, grain string, start, end time.Time) ([]periodBucket, error) {
-	q := fmt.Sprintf(`
-		SELECT
-		  CAST(%s AS DATE) AS bucket,
-		  COUNT(*)         AS total
-		FROM event_api_request
-		WHERE ts >= ? AND ts < ?
-		GROUP BY 1
-		ORDER BY 1
-	`, localGrainExpr(w, "ts", grain))
-
-	rows, err := db.QueryContext(ctx, q, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("query requests sparkline: %w", err)
-	}
-	defer rows.Close()
-
-	var out []periodBucket
-	for rows.Next() {
-		var b periodBucket
-		if err := rows.Scan(&b.Bucket, &b.Total); err != nil {
-			return nil, fmt.Errorf("scan requests sparkline: %w", err)
+// QueryRequestsSparkline — bucketed request counts (codex = completed rows).
+// Reuses periodBucket so the caller can pad with fillTokensSparkline.
+func QueryRequestsSparkline(ctx context.Context, db *sql.DB, client Client, w TimeWindow, grain string, start, end time.Time) ([]periodBucket, error) {
+	acc := map[time.Time]int64{}
+	if client.includesClaude() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket, COUNT(*) AS total
+			FROM event_api_request
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if err := runBucketQuery(ctx, db, q, acc, "requests sparkline (claude)", start, end); err != nil {
+			return nil, err
 		}
-		out = append(out, b)
 	}
-	return out, rows.Err()
+	if client.includesCodex() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket, COUNT(*) AS total
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if err := runBucketQuery(ctx, db, q, acc, "requests sparkline (codex)", start, end); err != nil {
+			return nil, err
+		}
+	}
+	return bucketsFromMap(acc), nil
 }
 
 // ─────────────────────────────────────────────────────────────────────

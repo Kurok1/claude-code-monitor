@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// BuildSnapshot assembles the snapshot response for the given range.
-// Queries are sequential — DuckDB MaxOpenConns=1 makes parallelism pointless.
-func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string) (SnapshotResponse, error) {
+// BuildSnapshot assembles the snapshot response for the given range and
+// client selection. Queries are sequential — DuckDB MaxOpenConns=1 makes
+// parallelism pointless.
+func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string, client Client) (SnapshotResponse, error) {
 	var resp SnapshotResponse
 	resp.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
@@ -19,48 +20,48 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 	}
 	resp.Range = spec.Range
 
-	curTokens, err := QueryPeriodTokens(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	curTokens, err := QueryPeriodTokens(ctx, db, client, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		return resp, err
 	}
-	prevTokens, err := QueryPeriodTokensTotal(ctx, db, spec.PreviousStart, spec.PreviousEnd)
+	prevTokens, err := QueryPeriodTokensTotal(ctx, db, client, spec.PreviousStart, spec.PreviousEnd)
 	if err != nil {
 		return resp, err
 	}
-	tokenBuckets, err := QueryTokensSparkline(ctx, db, w, spec.SparklineGrain,
+	tokenBuckets, err := QueryTokensSparkline(ctx, db, client, w, spec.SparklineGrain,
 		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		return resp, err
 	}
 
-	curCost, err := QueryPeriodCost(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	curCost, err := QueryPeriodCost(ctx, db, client, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		return resp, err
 	}
-	prevCost, err := QueryPeriodCost(ctx, db, spec.PreviousStart, spec.PreviousEnd)
+	prevCost, err := QueryPeriodCost(ctx, db, client, spec.PreviousStart, spec.PreviousEnd)
 	if err != nil {
 		return resp, err
 	}
-	costBuckets, err := QueryCostSparkline(ctx, db, w, spec.SparklineGrain,
+	costBuckets, err := QueryCostSparkline(ctx, db, client, w, spec.SparklineGrain,
 		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		return resp, err
 	}
 
-	cacheRead, cacheCreation, err := QueryPeriodCache(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	pc, err := QueryPeriodCache(ctx, db, client, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		return resp, err
 	}
 
-	curRequests, err := QueryPeriodRequests(ctx, db, spec.CurrentStart, spec.CurrentEnd)
+	curRequests, err := QueryPeriodRequests(ctx, db, client, spec.CurrentStart, spec.CurrentEnd)
 	if err != nil {
 		return resp, err
 	}
-	prevRequests, err := QueryPeriodRequests(ctx, db, spec.PreviousStart, spec.PreviousEnd)
+	prevRequests, err := QueryPeriodRequests(ctx, db, client, spec.PreviousStart, spec.PreviousEnd)
 	if err != nil {
 		return resp, err
 	}
-	requestBuckets, err := QueryRequestsSparkline(ctx, db, w, spec.SparklineGrain,
+	requestBuckets, err := QueryRequestsSparkline(ctx, db, client, w, spec.SparklineGrain,
 		spec.SparklineStart, spec.PeriodEnd)
 	if err != nil {
 		return resp, err
@@ -92,9 +93,9 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 		Sparkline: fillCostSparkline(costBuckets, spec, w.Loc),
 	}
 	resp.Cache = CacheBlock{
-		HitRate:        cacheHitRate(cacheRead, cacheCreation),
-		ReadTokens:     cacheRead,
-		CreationTokens: cacheCreation,
+		HitRate:        hitRateFrom(pc),
+		ReadTokens:     pc.Read,
+		CreationTokens: pc.Creation,
 	}
 	resp.Requests = RequestsBlock{
 		Total:     curRequests,
@@ -149,14 +150,14 @@ func advanceGrain(d time.Time, grain string) time.Time {
 	return d
 }
 
-// cacheHitRate returns the ratio of cache reads to total cache-touched
-// tokens, or nil when no cache activity exists in the window.
-func cacheHitRate(read, creation int64) *float64 {
-	denom := read + creation
-	if denom == 0 {
+// hitRateFrom returns Read/HitDenom, or nil when there is no denominator
+// (no cache-relevant activity in the window). The denominator differs per
+// family — see the periodCache doc.
+func hitRateFrom(pc periodCache) *float64 {
+	if pc.HitDenom == 0 {
 		return nil
 	}
-	v := float64(read) / float64(denom)
+	v := float64(pc.Read) / float64(pc.HitDenom)
 	return &v
 }
 
