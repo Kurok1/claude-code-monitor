@@ -114,7 +114,7 @@ func TestHandler_Heatmap_Route(t *testing.T) {
 	h, err := NewHandler(db, config.DashboardConfig{
 		Timezone: "Asia/Shanghai",
 		Heatmap:  config.HeatmapConfig{WTokens: 0.4, WCost: 0.4, WRequests: 0.2},
-	}, nil)
+	}, false, nil)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

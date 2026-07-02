@@ -485,3 +485,25 @@ func TestQueryPeriodCostIncludesCodex(t *testing.T) {
 		t.Fatalf("all cost = %v, want 1.75", all)
 	}
 }
+
+func TestSnapshotCostEstimatedFlag(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	c, _ := NewClassifier(nil)
+
+	claude, err := BuildSnapshot(ctx, db, c, w, "day", ClientClaude, true)
+	if err != nil {
+		t.Fatalf("claude snapshot: %v", err)
+	}
+	if claude.Cost.Estimated {
+		t.Fatal("claude view must not be flagged estimated")
+	}
+	codexOn, _ := BuildSnapshot(ctx, db, c, w, "day", ClientCodex, true)
+	if !codexOn.Cost.Estimated {
+		t.Fatal("codex view with pricing enabled must be estimated")
+	}
+	codexOff, _ := BuildSnapshot(ctx, db, c, w, "day", ClientCodex, false)
+	if codexOff.Cost.Estimated {
+		t.Fatal("codex view with pricing disabled must not be estimated")
+	}
+}

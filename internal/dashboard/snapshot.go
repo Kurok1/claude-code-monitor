@@ -10,7 +10,7 @@ import (
 // BuildSnapshot assembles the snapshot response for the given range and
 // client selection. Queries are sequential — DuckDB MaxOpenConns=1 makes
 // parallelism pointless.
-func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string, client Client) (SnapshotResponse, error) {
+func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string, client Client, pricingEnabled bool) (SnapshotResponse, error) {
 	var resp SnapshotResponse
 	resp.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
@@ -91,6 +91,7 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 		Total:     curCost,
 		PrevTotal: prevCost,
 		Sparkline: fillCostSparkline(costBuckets, spec, w.Loc),
+		Estimated: pricingEnabled && client.includesCodex(),
 	}
 	resp.Cache = CacheBlock{
 		HitRate:        hitRateFrom(pc),

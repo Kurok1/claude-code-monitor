@@ -101,7 +101,7 @@ func run() error {
 	} else {
 		slog.Warn("web UI not mounted", "err", err)
 	}
-	dashHandler, err := dashboard.NewHandler(db.SQL, cfg.Dashboard, slog.Default())
+	dashHandler, err := dashboard.NewHandler(db.SQL, cfg.Dashboard, cfg.Pricing.Enabled, slog.Default())
 	if err != nil {
 		_ = writer.Stop()
 		return fmt.Errorf("init dashboard handler: %w", err)

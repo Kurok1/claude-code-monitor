@@ -30,6 +30,7 @@ type CostBlock struct {
 	Total     float64   `json:"total"`
 	PrevTotal float64   `json:"prev_total"`
 	Sparkline []float64 `json:"sparkline"`
+	Estimated bool      `json:"cost_estimated"` // true when the shown cost includes codex estimates
 }
 
 // RequestsBlock counts API requests (rows in event_api_request) in the
