@@ -18,7 +18,7 @@ import (
 // series, then computes each day's composite Score normalized against the
 // window max for each metric (see HeatmapResponse doc). Queries are
 // sequential — DuckDB MaxOpenConns=1 makes parallelism pointless.
-func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights HeatmapWeights) (HeatmapResponse, error) {
+func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights HeatmapWeights, client Client) (HeatmapResponse, error) {
 	resp := HeatmapResponse{
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		Days:      heatmapDays,
@@ -28,15 +28,15 @@ func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights Heatmap
 
 	start, end := w.HeatmapStartUTC, w.TodayEndUTC
 
-	tokBuckets, err := QueryTokensSparkline(ctx, db, ClientAll, w, "day", start, end)
+	tokBuckets, err := QueryTokensSparkline(ctx, db, client, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}
-	costBuckets, err := QueryCostSparkline(ctx, db, ClientAll, w, "day", start, end)
+	costBuckets, err := QueryCostSparkline(ctx, db, client, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}
-	reqBuckets, err := QueryRequestsSparkline(ctx, db, ClientAll, w, "day", start, end)
+	reqBuckets, err := QueryRequestsSparkline(ctx, db, client, w, "day", start, end)
 	if err != nil {
 		return resp, err
 	}
@@ -81,7 +81,12 @@ func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights Heatmap
 		d = d.AddDate(0, 0, 1)
 	}
 
+	// Codex has no cost data: keeping the cost weight in the denominator
+	// would systematically depress every codex-only score, so drop it there.
 	wsum := weights.Tokens + weights.Cost + weights.Requests
+	if client == ClientCodex {
+		wsum = weights.Tokens + weights.Requests
+	}
 	for i := range points {
 		if wsum <= 0 {
 			break // validated > 0 at config load; defensive guard

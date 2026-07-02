@@ -151,6 +151,11 @@ func (h *Handler) handleRankings(w http.ResponseWriter, r *http.Request) {
 // handleHeatmap serves the fixed 360-day usage heatmap. No request params —
 // the window is always the trailing 360 local days; weights come from config.
 func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
 	if err != nil {
 		h.log.Error("heatmap: build time window", "err", err)
@@ -161,7 +166,7 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		Tokens:   h.cfg.Heatmap.WTokens,
 		Cost:     h.cfg.Heatmap.WCost,
 		Requests: h.cfg.Heatmap.WRequests,
-	})
+	}, client)
 	if err != nil {
 		h.log.Error("heatmap: build", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")

@@ -244,3 +244,27 @@ func TestQueryTrends_IncludesCodex(t *testing.T) {
 		t.Errorf("codex trend tokens = %d, want 1200 (input+output, no cached)", codexTokens)
 	}
 }
+
+func TestBuildHeatmap_CodexWeightDenominator(t *testing.T) {
+	db, w, _ := testDB(t)
+	// 只种一条 codex 数据 → 该日 token 与请求都是窗口 max(norm=1),cost 恒 0
+	ts := w.TodayStartUTC.Add(2 * time.Hour)
+	insertCodexTokenUsage(t, db, ts, "conv-h", "gpt-5.5", 100, 50, 0, 0)
+
+	weights := HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}
+	resp, err := BuildHeatmap(context.Background(), db, w, weights, ClientCodex)
+	if err != nil {
+		t.Fatalf("BuildHeatmap: %v", err)
+	}
+	var maxScore float64
+	for _, p := range resp.Points {
+		if p.Score > maxScore {
+			maxScore = p.Score
+		}
+	}
+	// codex 视图分母须剔除 cost 权重:score = (0.4·1 + 0.2·1)/(0.4+0.2) = 1.0
+	// 若沿用三权重分母会得到 0.6,即被恒零的 cost 系统性压低。
+	if maxScore < 0.999 {
+		t.Errorf("max score = %v, want 1.0 (cost weight must leave the denominator for codex)", maxScore)
+	}
+}

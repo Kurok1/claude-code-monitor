@@ -44,7 +44,7 @@ func TestBuildHeatmap_ShapeAndGapFill(t *testing.T) {
 	}
 
 	resp, err := BuildHeatmap(context.Background(), db, w,
-		HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2})
+		HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}, ClientAll)
 	if err != nil {
 		t.Fatalf("BuildHeatmap: %v", err)
 	}
@@ -95,8 +95,8 @@ func TestBuildHeatmap_WeightScaleInvariant(t *testing.T) {
 		insertApiRequest(t, db, day, "m")
 	}
 
-	a, _ := BuildHeatmap(context.Background(), db, w, HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2})
-	b, _ := BuildHeatmap(context.Background(), db, w, HeatmapWeights{Tokens: 2, Cost: 2, Requests: 1})
+	a, _ := BuildHeatmap(context.Background(), db, w, HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}, ClientAll)
+	b, _ := BuildHeatmap(context.Background(), db, w, HeatmapWeights{Tokens: 2, Cost: 2, Requests: 1}, ClientAll)
 	pa, _ := findPoint(a.Points, "2026-05-11")
 	pb, _ := findPoint(b.Points, "2026-05-11")
 	if !approx(pa.Score, pb.Score) {
