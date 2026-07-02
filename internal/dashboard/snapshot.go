@@ -67,15 +67,15 @@ func BuildSnapshot(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow,
 		return resp, err
 	}
 
-	modelTok, err := QueryModelTokens(ctx, db)
+	modelTok, err := QueryModelTokens(ctx, db, client)
 	if err != nil {
 		return resp, err
 	}
-	modelC, err := QueryModelCost(ctx, db)
+	modelC, err := QueryModelCost(ctx, db, client)
 	if err != nil {
 		return resp, err
 	}
-	modelR, err := QueryModelRequests(ctx, db)
+	modelR, err := QueryModelRequests(ctx, db, client)
 	if err != nil {
 		return resp, err
 	}

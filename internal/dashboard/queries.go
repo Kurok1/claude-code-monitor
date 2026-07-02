@@ -325,32 +325,57 @@ type modelTokens struct {
 	CacheTokens int64
 }
 
-func QueryModelTokens(ctx context.Context, db *sql.DB) ([]modelTokens, error) {
-	const q = `
-		SELECT
-		  model,
-		  COALESCE(SUM(CASE WHEN type='input'     THEN value END), 0) AS tokens_in,
-		  COALESCE(SUM(CASE WHEN type='output'    THEN value END), 0) AS tokens_out,
-		  COALESCE(SUM(CASE WHEN type='cacheRead' THEN value END), 0) AS cache_tokens
-		FROM metric_token_usage
-		WHERE model IS NOT NULL
-		GROUP BY model
-	`
-	rows, err := db.QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("query model tokens: %w", err)
+func QueryModelTokens(ctx context.Context, db *sql.DB, client Client) ([]modelTokens, error) {
+	scanInto := func(q, label string, out []modelTokens) ([]modelTokens, error) {
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r modelTokens
+			if err := rows.Scan(&r.Model, &r.TokensIn, &r.TokensOut, &r.CacheTokens); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
 	}
-	defer rows.Close()
 
 	var out []modelTokens
-	for rows.Next() {
-		var r modelTokens
-		if err := rows.Scan(&r.Model, &r.TokensIn, &r.TokensOut, &r.CacheTokens); err != nil {
-			return nil, fmt.Errorf("scan model tokens: %w", err)
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT
+			  model,
+			  COALESCE(SUM(CASE WHEN type='input'     THEN value END), 0) AS tokens_in,
+			  COALESCE(SUM(CASE WHEN type='output'    THEN value END), 0) AS tokens_out,
+			  COALESCE(SUM(CASE WHEN type='cacheRead' THEN value END), 0) AS cache_tokens
+			FROM metric_token_usage
+			WHERE model IS NOT NULL
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "model tokens (claude)", out); err != nil {
+			return nil, err
 		}
-		out = append(out, r)
 	}
-	return out, rows.Err()
+	if client.includesCodex() {
+		// Same projection rule as QueryPeriodTokens: in excludes the cached
+		// subset so in+out+cache equals the codex total exactly.
+		const q = `
+			SELECT model,
+			  COALESCE(SUM(COALESCE(input_token_count, 0) - COALESCE(cached_token_count, 0)), 0) AS tokens_in,
+			  COALESCE(SUM(COALESCE(output_token_count, 0)), 0)                                   AS tokens_out,
+			  COALESCE(SUM(COALESCE(cached_token_count, 0)), 0)                                   AS cache_tokens
+			FROM codex_event_token_usage
+			WHERE model IS NOT NULL
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "model tokens (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 type modelCost struct {
@@ -358,7 +383,11 @@ type modelCost struct {
 	Cost  float64
 }
 
-func QueryModelCost(ctx context.Context, db *sql.DB) ([]modelCost, error) {
+// QueryModelCost is Claude-only: codex reports no cost data.
+func QueryModelCost(ctx context.Context, db *sql.DB, client Client) ([]modelCost, error) {
+	if !client.includesClaude() {
+		return nil, nil
+	}
 	const q = `
 		SELECT model, SUM(value) AS cost
 		FROM metric_cost_usage
@@ -387,28 +416,48 @@ type modelRequests struct {
 	Requests int64
 }
 
-func QueryModelRequests(ctx context.Context, db *sql.DB) ([]modelRequests, error) {
-	const q = `
-		SELECT model, COUNT(*) AS requests
-		FROM event_api_request
-		WHERE model IS NOT NULL
-		GROUP BY model
-	`
-	rows, err := db.QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("query model requests: %w", err)
+func QueryModelRequests(ctx context.Context, db *sql.DB, client Client) ([]modelRequests, error) {
+	scanInto := func(q, label string, out []modelRequests) ([]modelRequests, error) {
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r modelRequests
+			if err := rows.Scan(&r.Model, &r.Requests); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
 	}
-	defer rows.Close()
 
 	var out []modelRequests
-	for rows.Next() {
-		var r modelRequests
-		if err := rows.Scan(&r.Model, &r.Requests); err != nil {
-			return nil, fmt.Errorf("scan model requests: %w", err)
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT model, COUNT(*) AS requests
+			FROM event_api_request
+			WHERE model IS NOT NULL
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "model requests (claude)", out); err != nil {
+			return nil, err
 		}
-		out = append(out, r)
 	}
-	return out, rows.Err()
+	if client.includesCodex() {
+		const q = `
+			SELECT model, COUNT(*) AS requests
+			FROM codex_event_token_usage
+			WHERE model IS NOT NULL
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "model requests (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -422,36 +471,52 @@ type trendRow struct {
 }
 
 // QueryTrends — stacked-area data for /api/usage/trends.
-// Returns one row per (bucket, raw model); the dashboard layer folds rows
-// into groups via the Classifier.
-func QueryTrends(ctx context.Context, db *sql.DB, w TimeWindow, grain string, windowStart time.Time) ([]trendRow, error) {
-	q := fmt.Sprintf(`
-		SELECT
-		  CAST(%s AS DATE) AS bucket_sh,
-		  model,
-		  SUM(value) AS tokens
-		FROM metric_token_usage
-		WHERE ts >= ?
-		  AND model IS NOT NULL
-		GROUP BY 1, 2
-		ORDER BY 1
-	`, localGrainExpr(w, "ts", grain))
-
-	rows, err := db.QueryContext(ctx, q, windowStart)
-	if err != nil {
-		return nil, fmt.Errorf("query trends: %w", err)
+// Returns one row per (bucket, raw model) across the requested arms; the
+// dashboard layer folds rows into groups via the Classifier (BuildTrends
+// accumulates, so duplicate (bucket, model) pairs across arms are safe).
+func QueryTrends(ctx context.Context, db *sql.DB, client Client, w TimeWindow, grain string, windowStart time.Time) ([]trendRow, error) {
+	scanInto := func(q, label string, out []trendRow) ([]trendRow, error) {
+		rows, err := db.QueryContext(ctx, q, windowStart)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r trendRow
+			if err := rows.Scan(&r.Bucket, &r.Model, &r.Tokens); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
 	}
-	defer rows.Close()
 
 	var out []trendRow
-	for rows.Next() {
-		var r trendRow
-		if err := rows.Scan(&r.Bucket, &r.Model, &r.Tokens); err != nil {
-			return nil, fmt.Errorf("scan trend row: %w", err)
+	var err error
+	if client.includesClaude() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket_sh, model, SUM(value) AS tokens
+			FROM metric_token_usage
+			WHERE ts >= ? AND model IS NOT NULL
+			GROUP BY 1, 2 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if out, err = scanInto(q, "trends (claude)", out); err != nil {
+			return nil, err
 		}
-		out = append(out, r)
 	}
-	return out, rows.Err()
+	if client.includesCodex() {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket_sh, model,
+			       SUM(COALESCE(input_token_count, 0) + COALESCE(output_token_count, 0)) AS tokens
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND model IS NOT NULL
+			GROUP BY 1, 2 ORDER BY 1
+		`, localGrainExpr(w, "ts", grain))
+		if out, err = scanInto(q, "trends (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────

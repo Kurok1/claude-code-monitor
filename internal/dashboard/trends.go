@@ -15,13 +15,13 @@ import (
 // across the window (descending), tie-broken alphabetically. All groups are
 // included — no "other" filter — so third-party models render alongside
 // Claude family buckets.
-func BuildTrends(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string) (TrendsResponse, error) {
+func BuildTrends(ctx context.Context, db *sql.DB, c *Classifier, w TimeWindow, rng string, client Client) (TrendsResponse, error) {
 	grain, start, count, err := trendsParams(w, rng)
 	if err != nil {
 		return TrendsResponse{}, err
 	}
 
-	rows, err := QueryTrends(ctx, db, w, grain, start)
+	rows, err := QueryTrends(ctx, db, client, w, grain, start)
 	if err != nil {
 		return TrendsResponse{}, err
 	}

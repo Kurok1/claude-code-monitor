@@ -190,3 +190,57 @@ func TestQueryTokensSparkline_AllMergesBuckets(t *testing.T) {
 		t.Errorf("sparkline sum = %d, want 1400", sum)
 	}
 }
+
+func TestQueryModelTokens_CodexProjection(t *testing.T) {
+	db, w, _ := testDB(t)
+	seedMixedPeriod(t, db, w)
+	ctx := context.Background()
+
+	rows, err := QueryModelTokens(ctx, db, ClientAll)
+	if err != nil {
+		t.Fatalf("QueryModelTokens: %v", err)
+	}
+	byModel := map[string]modelTokens{}
+	for _, r := range rows {
+		byModel[r.Model] = r
+	}
+	g, ok := byModel["gpt-5.5"]
+	if !ok {
+		t.Fatal("gpt-5.5 missing from model tokens")
+	}
+	// in=600(input-cached) out=200 cache=400 → 三者之和恰等于 codex 总量 1200
+	if g.TokensIn != 600 || g.TokensOut != 200 || g.CacheTokens != 400 {
+		t.Errorf("gpt-5.5 = %+v, want in=600 out=200 cache=400", g)
+	}
+	if _, ok := byModel["claude-opus-4-1"]; !ok {
+		t.Error("claude model missing under ClientAll")
+	}
+
+	codexOnly, err := QueryModelTokens(ctx, db, ClientCodex)
+	if err != nil {
+		t.Fatalf("codex only: %v", err)
+	}
+	if len(codexOnly) != 1 || codexOnly[0].Model != "gpt-5.5" {
+		t.Errorf("ClientCodex rows = %+v, want only gpt-5.5", codexOnly)
+	}
+}
+
+func TestQueryTrends_IncludesCodex(t *testing.T) {
+	db, w, _ := testDB(t)
+	seedMixedPeriod(t, db, w)
+	ctx := context.Background()
+
+	rows, err := QueryTrends(ctx, db, ClientAll, w, "day", w.DayTrendStartUTC)
+	if err != nil {
+		t.Fatalf("QueryTrends: %v", err)
+	}
+	var codexTokens int64
+	for _, r := range rows {
+		if r.Model == "gpt-5.5" {
+			codexTokens += r.Tokens
+		}
+	}
+	if codexTokens != 1200 {
+		t.Errorf("codex trend tokens = %d, want 1200 (input+output, no cached)", codexTokens)
+	}
+}

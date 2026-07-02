@@ -291,7 +291,7 @@ func TestQueryModelTokens_RawModels(t *testing.T) {
 	insertTokenUsage(t, db, ts, "claude-haiku-4-5", "output", 30)
 	insertTokenUsage(t, db, ts, "deepseek-v3", "cacheRead", 5)
 
-	got, err := QueryModelTokens(context.Background(), db)
+	got, err := QueryModelTokens(context.Background(), db, ClientAll)
 	if err != nil {
 		t.Fatalf("QueryModelTokens: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestQueryTrends_DayGrain(t *testing.T) {
 	insertTokenUsage(t, db, w.TodayStartUTC.Add(-2*24*time.Hour).Add(time.Hour),
 		"claude-sonnet-4-5", "output", 25)
 
-	got, err := QueryTrends(context.Background(), db, w, "day", w.DayTrendStartUTC)
+	got, err := QueryTrends(context.Background(), db, ClientAll, w, "day", w.DayTrendStartUTC)
 	if err != nil {
 		t.Fatalf("QueryTrends: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestQueryModelCostAndRequests(t *testing.T) {
 	insertApiRequest(t, db, ts, "claude-opus-4-1")
 	insertApiRequest(t, db, ts, "claude-haiku-4-5")
 
-	costs, _ := QueryModelCost(context.Background(), db)
+	costs, _ := QueryModelCost(context.Background(), db, ClientAll)
 	byModel := map[string]float64{}
 	for _, c := range costs {
 		byModel[c.Model] = c.Cost
@@ -398,7 +398,7 @@ func TestQueryModelCostAndRequests(t *testing.T) {
 		t.Errorf("costs = %v", byModel)
 	}
 
-	reqs, _ := QueryModelRequests(context.Background(), db)
+	reqs, _ := QueryModelRequests(context.Background(), db, ClientAll)
 	byR := map[string]int64{}
 	for _, r := range reqs {
 		byR[r.Model] = r.Requests
