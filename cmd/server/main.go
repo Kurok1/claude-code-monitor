@@ -15,6 +15,7 @@ import (
 	"github.com/kuroky/claude-code-monitor/internal/dashboard"
 	"github.com/kuroky/claude-code-monitor/internal/logging"
 	"github.com/kuroky/claude-code-monitor/internal/otlp"
+	"github.com/kuroky/claude-code-monitor/internal/pricing"
 	"github.com/kuroky/claude-code-monitor/internal/stats"
 	"github.com/kuroky/claude-code-monitor/internal/store"
 	"github.com/kuroky/claude-code-monitor/internal/web"
@@ -63,6 +64,13 @@ func run() error {
 		}
 	}
 
+	priceEngine, err := pricing.NewEngine(cfg.Pricing, slog.Default())
+	if err != nil {
+		return fmt.Errorf("init pricing engine: %w", err)
+	}
+	priceEngine.Start()
+	defer priceEngine.Stop()
+
 	db, err := store.Open(cfg.Storage)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -104,7 +112,7 @@ func run() error {
 		return fmt.Errorf("init stats server: %w", err)
 	}
 
-	srv, err := otlp.NewServer(cfg, slog.Default(), writer)
+	srv, err := otlp.NewServer(cfg, slog.Default(), writer, priceEngine)
 	if err != nil {
 		_ = statsSrv.Shutdown(context.Background())
 		_ = writer.Stop()

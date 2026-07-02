@@ -23,7 +23,7 @@ func dispatchAllCapturedLogs(t *testing.T) (DispatchSummary, *NoopSink) {
 		t.Skipf("no captured log files under %s; run Task 1 of the codex plan to collect samples", capturedDir)
 	}
 	sink := &NoopSink{}
-	d := NewDispatcher(quietLogger(), sink)
+	d := NewDispatcher(quietLogger(), sink, nil)
 	merged := DispatchSummary{
 		EventRows: map[string]int{},
 		Unknown:   map[string]int{},
