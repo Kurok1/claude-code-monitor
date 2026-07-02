@@ -12,10 +12,11 @@ import { formatTokens, formatPct } from '../lib/format';
 
 interface Props {
   id: string;
+  client?: 'claude' | 'codex';
   onBack: () => void;
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="kpi">
       <div className="kpi__top">
@@ -26,11 +27,16 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="kpi__value">
         <span>{value}</span>
       </div>
+      {sub && (
+        <div className="kpi__foot">
+          <span>{sub}</span>
+        </div>
+      )}
     </div>
   );
 }
 
-export function SessionDetailView({ id, onBack }: Props) {
+export function SessionDetailView({ id, client, onBack }: Props) {
   const [d, setD] = useState<SessionDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -38,7 +44,7 @@ export function SessionDetailView({ id, onBack }: Props) {
     let cancelled = false;
     setD(null);
     setErr(null);
-    Sessions.detail(id)
+    Sessions.detail(id, client)
       .then(r => {
         if (!cancelled) setD(r);
       })
@@ -48,7 +54,7 @@ export function SessionDetailView({ id, onBack }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, client]);
 
   if (err) {
     return (
@@ -89,6 +95,9 @@ export function SessionDetailView({ id, onBack }: Props) {
         <div>
           <h1>会话详情</h1>
           <p>
+            <span className={`client-badge client-badge--${d.client}`}>
+              {d.client === 'codex' ? 'Codex' : 'Claude'}
+            </span>
             <span className="session-id">{d.session_id}</span>
             <br />
             {started} → {ended}
@@ -97,10 +106,20 @@ export function SessionDetailView({ id, onBack }: Props) {
       </div>
 
       <div className="kpi-grid">
-        <Stat label="Token 用量" value={formatTokens(d.tokens)} />
+        <Stat
+          label="Token 用量"
+          value={formatTokens(d.tokens)}
+          sub={
+            d.token_detail
+              ? `输入 ${formatTokens(d.token_detail.input)} · 输出 ${formatTokens(d.token_detail.output)} · 缓存 ${formatTokens(d.token_detail.cached)} · 推理 ${formatTokens(d.token_detail.reasoning)}`
+              : undefined
+          }
+        />
         <Stat label="请求次数" value={d.requests.toLocaleString()} />
         <Stat label="工具调用" value={d.tool_calls.toLocaleString()} />
-        <Stat label="Skill 激活" value={d.skill_activations.toLocaleString()} />
+        {d.client !== 'codex' && (
+          <Stat label="Skill 激活" value={d.skill_activations.toLocaleString()} />
+        )}
       </div>
 
       <div className="cols-2">
@@ -136,6 +155,7 @@ export function SessionDetailView({ id, onBack }: Props) {
           )}
         </section>
 
+        {d.client !== 'codex' && (
         <section className="card">
           <div className="card-head">
             <div>
@@ -170,6 +190,7 @@ export function SessionDetailView({ id, onBack }: Props) {
             </div>
           )}
         </section>
+        )}
       </div>
     </main>
   );

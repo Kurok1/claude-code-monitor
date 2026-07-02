@@ -7,7 +7,7 @@ import { DonutChart } from './components/charts/DonutChart';
 import { CalendarHeatmap } from './components/charts/CalendarHeatmap';
 import { TweaksPanel, useTweaks } from './components/TweaksPanel';
 import { Dashboard } from './api/dashboard';
-import type { DashboardData, Range, Since } from './api/dashboard';
+import type { DashboardData, Range, Since, Client } from './api/dashboard';
 import { formatCurrency, formatPct, formatTokens } from './lib/format';
 import { TOOL_PALETTE, SKILL_PALETTE } from './lib/palette';
 import { SessionsView } from './views/SessionsView';
@@ -94,12 +94,16 @@ function KpiCard({ icon, label, value, unit, delta, foot, sparkValues, sparkColo
 // Client-side view selector (no router): the dashboard, the session list, or
 // one session's detail. Navigation is plain state — URLs are not deep-linkable
 // in this first cut.
-type View = { name: 'dashboard' } | { name: 'sessions' } | { name: 'session'; id: string };
+type View =
+  | { name: 'dashboard' }
+  | { name: 'sessions' }
+  | { name: 'session'; id: string; client: 'claude' | 'codex' };
 
 export default function App() {
   const [tweaks, setTweak] = useTweaks();
   const [range, setRange] = useState<Range>('day');
   const [since, setSince] = useState<Since>('7d');
+  const [client, setClient] = useState<Client>('all');
   const [data, setData] = useState<DashboardData | null>(null);
   // seriesOn keys are model group ids (e.g. "opus-4.7", "deepseek-v3").
   // Missing entries default to enabled — newly seen groups light up on first load.
@@ -112,7 +116,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     setRefreshing(true);
-    Dashboard.fetch(range, since)
+    Dashboard.fetch(range, since, client)
       .then(d => {
         if (!cancelled) {
           setData(d);
@@ -128,7 +132,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [range, since, refreshKey]);
+  }, [range, since, refreshKey, client]);
 
   useEffect(() => {
     const i = window.setInterval(() => setNow(new Date()), 60_000);
@@ -224,12 +228,19 @@ export default function App() {
 
   if (view.name === 'sessions') {
     return renderShell(
-      <SessionsView onOpen={id => setView({ name: 'session', id })} />
+      <SessionsView
+        client={client}
+        onOpen={(id, c) => setView({ name: 'session', id, client: c })}
+      />
     );
   }
   if (view.name === 'session') {
     return renderShell(
-      <SessionDetailView id={view.id} onBack={() => setView({ name: 'sessions' })} />
+      <SessionDetailView
+        id={view.id}
+        client={view.client}
+        onBack={() => setView({ name: 'sessions' })}
+      />
     );
   }
 
@@ -286,7 +297,9 @@ export default function App() {
         <div className="page-hero">
           <div>
             <h1>
-              {rangePrefix}的 <em>Claude Code</em> 表现
+              {rangePrefix}的{' '}
+              <em>{client === 'codex' ? 'Codex' : client === 'claude' ? 'Claude Code' : 'AI 编码'}</em>{' '}
+              表现
             </h1>
             <p>
               {now.toLocaleDateString('zh-CN', {
@@ -298,18 +311,33 @@ export default function App() {
               · 数据每分钟自动同步
             </p>
           </div>
-          <div className="range-toggle" role="tablist" aria-label="时间维度">
-            {(
-              [
-                ['day', '日'],
-                ['week', '周'],
-                ['month', '月'],
-              ] as const
-            ).map(([k, l]) => (
-              <button key={k} aria-pressed={range === k} onClick={() => setRange(k)}>
-                {l}
-              </button>
-            ))}
+          <div className="hero-toggles">
+            <div className="range-toggle" role="tablist" aria-label="客户端">
+              {(
+                [
+                  ['all', '全部'],
+                  ['claude', 'Claude'],
+                  ['codex', 'Codex'],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} aria-pressed={client === k} onClick={() => setClient(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+            <div className="range-toggle" role="tablist" aria-label="时间维度">
+              {(
+                [
+                  ['day', '日'],
+                  ['week', '周'],
+                  ['month', '月'],
+                ] as const
+              ).map(([k, l]) => (
+                <button key={k} aria-pressed={range === k} onClick={() => setRange(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -328,21 +356,23 @@ export default function App() {
             sparkValues={data.tokens.sparkline}
             animate
           />
-          <KpiCard
-            icon="dollar"
-            label={`${rangePrefix}消费金额`}
-            value={data.cost.total}
-            unit="USD"
-            delta={costDelta}
-            precision={2}
-            foot={
-              <>
-                {prevLabel} <strong>${data.cost.prev_total.toFixed(2)}</strong>
-              </>
-            }
-            sparkValues={data.cost.sparkline}
-            animate
-          />
+          {client !== 'codex' && (
+            <KpiCard
+              icon="dollar"
+              label={`${rangePrefix}消费金额`}
+              value={data.cost.total}
+              unit="USD"
+              delta={costDelta}
+              precision={2}
+              foot={
+                <>
+                  {prevLabel} <strong>${data.cost.prev_total.toFixed(2)}</strong>
+                </>
+              }
+              sparkValues={data.cost.sparkline}
+              animate
+            />
+          )}
           <KpiCard
             icon="database"
             label={`${rangePrefix}缓存命中率`}
@@ -450,11 +480,13 @@ export default function App() {
           </div>
         </section>
 
+        {client !== 'codex' && (
+        <>
         <div className="section-head">
           <div>
             <h2>累计排名</h2>
             <p>
-              {since === 'all' ? '所有时间' : `近 ${since === '7d' ? '7 天' : '30 天'}`} · 跨项目汇总
+              {since === 'all' ? '所有时间' : `近 ${since === '7d' ? '7 天' : '30 天'}`} · 跨项目汇总 · 仅统计 Claude Code
             </p>
           </div>
           <div className="range-toggle" role="tablist" aria-label="排名时段">
@@ -532,6 +564,8 @@ export default function App() {
             </div>
           </section>
         </div>
+        </>
+        )}
 
         <section className="card">
           <div className="card-head">
@@ -548,7 +582,7 @@ export default function App() {
                 <th className="num">输入 Tokens</th>
                 <th className="num">输出 Tokens</th>
                 <th className="num">缓存读取</th>
-                <th className="num">费用</th>
+                {client !== 'codex' && <th className="num">费用</th>}
                 <th className="num" style={{ minWidth: 140 }}>
                   占比
                 </th>
@@ -570,9 +604,11 @@ export default function App() {
                   <td className="num">{formatTokens(m.tokens_in)}</td>
                   <td className="num">{formatTokens(m.tokens_out)}</td>
                   <td className="num">{formatTokens(m.cache_tokens)}</td>
-                  <td className="num">
-                    <strong>{formatCurrency(m.cost)}</strong>
-                  </td>
+                  {client !== 'codex' && (
+                    <td className="num">
+                      <strong>{formatCurrency(m.cost)}</strong>
+                    </td>
+                  )}
                   <td className="num">
                     <div className="bar-cell">
                       <span>{formatPct(m.share, 1)}</span>

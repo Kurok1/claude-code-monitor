@@ -8,8 +8,11 @@
 
 import { getJSON } from './http';
 
+export type SessionClient = 'claude' | 'codex';
+
 export interface SessionSummary {
   session_id: string;
+  client: SessionClient;
   first_active: string;
   last_active: string;
   tokens: number;
@@ -36,6 +39,7 @@ export interface SkillSlice {
 
 export interface SessionDetail {
   session_id: string;
+  client: SessionClient;
   first_active: string;
   last_active: string;
   tokens: number;
@@ -44,13 +48,21 @@ export interface SessionDetail {
   skill_activations: number;
   tools: ToolSlice[];
   skills: SkillSlice[];
+  // codex-only:四个原始 token 维度(子集口径:cached ⊂ input、reasoning ⊂ output)
+  token_detail?: {
+    input: number;
+    output: number;
+    cached: number;
+    reasoning: number;
+  };
 }
 
 export const Sessions = {
-  list(limit = 30): Promise<SessionListResponse> {
-    return getJSON<SessionListResponse>(`/api/sessions?limit=${limit}`);
+  list(limit = 30, client: 'all' | SessionClient = 'all'): Promise<SessionListResponse> {
+    return getJSON<SessionListResponse>(`/api/sessions?limit=${limit}&client=${client}`);
   },
-  detail(id: string): Promise<SessionDetail> {
-    return getJSON<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`);
+  detail(id: string, client?: SessionClient): Promise<SessionDetail> {
+    const suffix = client ? `?client=${client}` : '';
+    return getJSON<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}${suffix}`);
   },
 };

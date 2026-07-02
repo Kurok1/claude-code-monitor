@@ -32,6 +32,8 @@ dashboard:
     w_requests: 0.2
   # model_groups: 自定义聚合规则。按顺序匹配,首个命中生效;未命中时若符合
   # claude-(opus|sonnet|haiku)-X-Y 模式,内置规则会输出 family-X.Y;否则保留原名。
+  # Codex 的模型名(如 gpt-5.5)也走这里:默认原样透传为独立分组(前端显示为
+  # "第三方模型"),想按家族聚合可参考下面的 gpt 示例。
   # `group` 可用 $1/$2 反向引用正则捕获组。
   # 示例:
   # model_groups:

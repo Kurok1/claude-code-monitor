@@ -67,13 +67,18 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if rng == "" {
 		rng = "day"
 	}
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
 	if err != nil {
 		h.log.Error("snapshot: build time window", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng)
+	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng, client)
 	if err != nil {
 		if isUserError(err) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -91,13 +96,18 @@ func (h *Handler) handleTrends(w http.ResponseWriter, r *http.Request) {
 	if rng == "" {
 		rng = "day"
 	}
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
 	if err != nil {
 		h.log.Error("trends: build time window", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildTrends(r.Context(), h.db, h.classifier, tw, rng)
+	resp, err := BuildTrends(r.Context(), h.db, h.classifier, tw, rng, client)
 	if err != nil {
 		// trendsParams returns a 400-class error for unknown range values;
 		// query errors are 500.
@@ -141,6 +151,11 @@ func (h *Handler) handleRankings(w http.ResponseWriter, r *http.Request) {
 // handleHeatmap serves the fixed 360-day usage heatmap. No request params —
 // the window is always the trailing 360 local days; weights come from config.
 func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
 	if err != nil {
 		h.log.Error("heatmap: build time window", "err", err)
@@ -151,7 +166,7 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		Tokens:   h.cfg.Heatmap.WTokens,
 		Cost:     h.cfg.Heatmap.WCost,
 		Requests: h.cfg.Heatmap.WRequests,
-	})
+	}, client)
 	if err != nil {
 		h.log.Error("heatmap: build", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -164,7 +179,12 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 // active sessions, newest first. limit defaults to 30, clamped to [1, 200].
 func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r.URL.Query().Get("limit"), 30, 200)
-	resp, err := BuildSessionList(r.Context(), h.db, limit)
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := BuildSessionList(r.Context(), h.db, client, limit)
 	if err != nil {
 		h.log.Error("sessions: list", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -180,7 +200,12 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
 	if err != nil {
 		h.log.Error("sessions: detail", "err", err, "session_id", id)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -217,7 +242,7 @@ func isUserError(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return contains(s, "invalid range") || contains(s, "invalid since")
+	return contains(s, "invalid range") || contains(s, "invalid since") || contains(s, "invalid client")
 }
 
 func contains(s, sub string) bool {

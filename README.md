@@ -237,11 +237,16 @@ pkill -TERM -f 'bin/server -config'                # 手动停
 GET /                                       Web UI（SPA，前端构建后才有）
 GET /api/usage/snapshot?range=day|week|month  KPI（tokens/cost/cache 按 range 切）+ 模型明细
 GET /api/usage/trends?range=day|week|month  各模型 Token 用量趋势
-GET /api/usage/rankings?since=7d|30d|all    工具 + Skill Top10 排名
+GET /api/usage/rankings?since=7d|30d|all    工具 + Skill Top10 排名（仅 Claude）
+GET /api/usage/heatmap                      360 天用量热点图
+GET /api/sessions?limit=                    会话列表（Claude session + Codex conversation 混排）
+GET /api/sessions/{id}                      会话详情
 GET /internal/healthz                       liveness
 GET /internal/stats                         per-table buffer 计数
 GET /debug/pprof/*                          运行时 profile（enable_pprof: true 时）
 ```
+
+usage / sessions 端点均支持 `client=all|claude|codex`（缺省 `all`）按客户端过滤；rankings 维持 Claude-only（两家工具命名空间不同）。Codex 的 token 统计口径为子集式，合并总量 = input + output（不重复计 cached/reasoning），成本恒为 Claude 数据。
 
 查询 API 设计与每个端点的 SQL 见 [`docs/plan-v2-query-api.md`](docs/plan-v2-query-api.md)。响应统一带 `Cache-Control: private, max-age=30`，所有时间窗按 `dashboard.timezone`（默认 `Asia/Shanghai`）切分。
 
