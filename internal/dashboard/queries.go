@@ -87,22 +87,28 @@ func QueryPeriodTokensTotal(ctx context.Context, db *sql.DB, client Client, star
 	return r.Total, nil
 }
 
-// QueryPeriodCost — total cost in [start, end). Codex has no cost data, so
-// only the Claude arm exists; ClientCodex always returns 0.
+// QueryPeriodCost — total cost in [start, end). Claude cost is authoritative
+// (metric_cost_usage); codex cost is the ingest-time estimate (cost_usd), only
+// present when pricing is enabled. Both arms accumulate.
 func QueryPeriodCost(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (float64, error) {
-	if !client.includesClaude() {
-		return 0, nil
+	var total float64
+	if client.includesClaude() {
+		const q = `SELECT COALESCE(SUM(value), 0) FROM metric_cost_usage WHERE ts >= ? AND ts < ?`
+		var v float64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
+			return 0, fmt.Errorf("query period cost (claude): %w", err)
+		}
+		total += v
 	}
-	const q = `
-		SELECT COALESCE(SUM(value), 0)
-		FROM metric_cost_usage
-		WHERE ts >= ? AND ts < ?
-	`
-	var v float64
-	if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
-		return 0, fmt.Errorf("query period cost: %w", err)
+	if client.includesCodex() {
+		const q = `SELECT COALESCE(SUM(cost_usd), 0) FROM codex_event_token_usage WHERE ts >= ? AND ts < ?`
+		var v float64
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&v); err != nil {
+			return 0, fmt.Errorf("query period cost (codex): %w", err)
+		}
+		total += v
 	}
-	return v, nil
+	return total, nil
 }
 
 // periodCache carries cache KPIs with an explicit hit-rate denominator,
@@ -249,36 +255,47 @@ type periodCostBucket struct {
 	Cost   float64
 }
 
-// QueryCostSparkline — bucketed total cost. Claude-only: codex has no cost.
+// QueryCostSparkline — bucketed cost. Claude authoritative + codex estimated,
+// merged per bucket.
 func QueryCostSparkline(ctx context.Context, db *sql.DB, client Client, w TimeWindow, grain string, start, end time.Time) ([]periodCostBucket, error) {
-	if !client.includesClaude() {
-		return nil, nil
-	}
-	q := fmt.Sprintf(`
-		SELECT
-		  CAST(%s AS DATE) AS bucket,
-		  SUM(value)       AS cost
-		FROM metric_cost_usage
-		WHERE ts >= ? AND ts < ?
-		GROUP BY 1
-		ORDER BY 1
-	`, localGrainExpr(w, "ts", grain))
-
-	rows, err := db.QueryContext(ctx, q, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("query cost sparkline: %w", err)
-	}
-	defer rows.Close()
-
-	var out []periodCostBucket
-	for rows.Next() {
-		var b periodCostBucket
-		if err := rows.Scan(&b.Bucket, &b.Cost); err != nil {
-			return nil, fmt.Errorf("scan cost sparkline: %w", err)
+	byBucket := map[time.Time]float64{}
+	add := func(table, valueExpr string) error {
+		q := fmt.Sprintf(`
+			SELECT CAST(%s AS DATE) AS bucket, SUM(%s) AS cost
+			FROM %s
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1
+		`, localGrainExpr(w, "ts", grain), valueExpr, table)
+		rows, err := db.QueryContext(ctx, q, start, end)
+		if err != nil {
+			return fmt.Errorf("query cost sparkline (%s): %w", table, err)
 		}
-		out = append(out, b)
+		defer rows.Close()
+		for rows.Next() {
+			var b periodCostBucket
+			if err := rows.Scan(&b.Bucket, &b.Cost); err != nil {
+				return fmt.Errorf("scan cost sparkline (%s): %w", table, err)
+			}
+			byBucket[b.Bucket] += b.Cost
+		}
+		return rows.Err()
 	}
-	return out, rows.Err()
+	if client.includesClaude() {
+		if err := add("metric_cost_usage", "value"); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		if err := add("codex_event_token_usage", "COALESCE(cost_usd, 0)"); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]periodCostBucket, 0, len(byBucket))
+	for b, c := range byBucket {
+		out = append(out, periodCostBucket{Bucket: b, Cost: c})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Bucket.Before(out[j].Bucket) })
+	return out, nil
 }
 
 // QueryRequestsSparkline — bucketed request counts (codex = completed rows).
@@ -383,32 +400,41 @@ type modelCost struct {
 	Cost  float64
 }
 
-// QueryModelCost is Claude-only: codex reports no cost data.
+// QueryModelCost — per-model all-time cost. Claude authoritative + codex
+// estimated, summed per model name.
 func QueryModelCost(ctx context.Context, db *sql.DB, client Client) ([]modelCost, error) {
-	if !client.includesClaude() {
-		return nil, nil
-	}
-	const q = `
-		SELECT model, SUM(value) AS cost
-		FROM metric_cost_usage
-		WHERE model IS NOT NULL
-		GROUP BY model
-	`
-	rows, err := db.QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("query model cost: %w", err)
-	}
-	defer rows.Close()
-
-	var out []modelCost
-	for rows.Next() {
-		var r modelCost
-		if err := rows.Scan(&r.Model, &r.Cost); err != nil {
-			return nil, fmt.Errorf("scan model cost: %w", err)
+	byModel := map[string]float64{}
+	add := func(table, valueExpr string) error {
+		q := fmt.Sprintf(`SELECT model, SUM(%s) AS cost FROM %s WHERE model IS NOT NULL GROUP BY model`, valueExpr, table)
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return fmt.Errorf("query model cost (%s): %w", table, err)
 		}
-		out = append(out, r)
+		defer rows.Close()
+		for rows.Next() {
+			var m modelCost
+			if err := rows.Scan(&m.Model, &m.Cost); err != nil {
+				return fmt.Errorf("scan model cost (%s): %w", table, err)
+			}
+			byModel[m.Model] += m.Cost
+		}
+		return rows.Err()
 	}
-	return out, rows.Err()
+	if client.includesClaude() {
+		if err := add("metric_cost_usage", "value"); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		if err := add("codex_event_token_usage", "COALESCE(cost_usd, 0)"); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]modelCost, 0, len(byModel))
+	for m, c := range byModel {
+		out = append(out, modelCost{Model: m, Cost: c})
+	}
+	return out, nil
 }
 
 type modelRequests struct {

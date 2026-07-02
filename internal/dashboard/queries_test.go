@@ -450,3 +450,38 @@ func TestMergeModelGroups_FoldsClaudeVariants(t *testing.T) {
 		t.Errorf("group[2] = %+v", got[2])
 	}
 }
+
+func insertCodexCostRow(t *testing.T, db *sql.DB, ts time.Time, model string, cost sql.NullFloat64) {
+	t.Helper()
+	_, err := db.Exec(`
+		INSERT INTO codex_event_token_usage
+		  (ts, conversation_id, model, input_token_count, output_token_count, cost_usd)
+		VALUES (?, 'conv-1', ?, 100, 100, ?)
+	`, ts, model, cost)
+	if err != nil {
+		t.Fatalf("insert codex cost row: %v", err)
+	}
+}
+
+func TestQueryPeriodCostIncludesCodex(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	ts := w.TodayStartUTC.Add(time.Hour)
+	insertCostUsage(t, db, ts, "claude-opus-4-1", 1.50)                                   // claude authoritative
+	insertCodexCostRow(t, db, ts, "gpt-5.5", sql.NullFloat64{Float64: 0.25, Valid: true}) // codex estimated
+	insertCodexCostRow(t, db, ts, "gpt-5.5", sql.NullFloat64{})                           // NULL → ignored
+
+	start, end := w.TodayStartUTC, w.TodayEndUTC
+	claudeOnly, _ := QueryPeriodCost(ctx, db, ClientClaude, start, end)
+	codexOnly, _ := QueryPeriodCost(ctx, db, ClientCodex, start, end)
+	all, _ := QueryPeriodCost(ctx, db, ClientAll, start, end)
+	if claudeOnly != 1.50 {
+		t.Fatalf("claude cost = %v, want 1.50", claudeOnly)
+	}
+	if codexOnly != 0.25 {
+		t.Fatalf("codex cost = %v, want 0.25 (NULL row ignored)", codexOnly)
+	}
+	if all != 1.75 {
+		t.Fatalf("all cost = %v, want 1.75", all)
+	}
+}
