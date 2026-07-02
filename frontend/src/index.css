@@ -1001,3 +1001,9 @@ body[data-theme="dark"] .heatmap-cell[data-level="0"] { fill: var(--bg-alt); }
 .back-btn:hover {
   color: var(--fg-1);
 }
+
+.hero-toggles {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

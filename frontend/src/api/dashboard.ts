@@ -15,6 +15,7 @@ import { getJSON } from './http';
 
 export type Range = 'day' | 'week' | 'month';
 export type Since = '7d' | '30d' | 'all';
+export type Client = 'all' | 'claude' | 'codex';
 
 export interface ModelMeta {
   id: string;
@@ -240,12 +241,13 @@ interface HeatmapWire {
 // ─────────────────────────────────────────────────────────────────────
 
 export const Dashboard = {
-  async fetch(range: Range = 'day', since: Since = '7d'): Promise<DashboardData> {
+  async fetch(range: Range = 'day', since: Since = '7d', client: Client = 'all'): Promise<DashboardData> {
     const [snap, trends, rankings, heatmap] = await Promise.all([
-      getJSON<SnapshotWire>(`/api/usage/snapshot?range=${range}`),
-      getJSON<TrendsWire>(`/api/usage/trends?range=${range}`),
+      getJSON<SnapshotWire>(`/api/usage/snapshot?range=${range}&client=${client}`),
+      getJSON<TrendsWire>(`/api/usage/trends?range=${range}&client=${client}`),
+      // rankings 本期维持 Claude-only(两家工具命名空间不同),不传 client
       getJSON<RankingsWire>(`/api/usage/rankings?since=${since}`),
-      getJSON<HeatmapWire>(`/api/usage/heatmap`),
+      getJSON<HeatmapWire>(`/api/usage/heatmap?client=${client}`),
     ]);
     return adapt(snap, trends, rankings, heatmap);
   },
