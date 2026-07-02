@@ -8,6 +8,13 @@ on:
 permissions:
   contents: write
 
+# Pricing baseline bundled into release artifacts (tar.gz + docker image). The
+# JSON is NOT vendored in the repo; it is fetched fresh at build time so each
+# release ships a working LiteLLM price table. Operators can still refresh it
+# at runtime via pricing.source_url.
+env:
+  LITELLM_PRICING_URL: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -85,6 +92,11 @@ jobs:
           NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
           go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
           cp config.example.yaml "dist/${NAME}/"
+          # Bundle the LiteLLM price table so `pricing.source_file: ./pricing/litellm.json`
+          # works out of the box from the extracted archive. Fetched at build time
+          # (not vendored); fail the release if it can't be retrieved.
+          mkdir -p "dist/${NAME}/pricing"
+          curl -fsSL --retry 5 --retry-delay 2 -o "dist/${NAME}/pricing/litellm.json" "${LITELLM_PRICING_URL}"
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
 
@@ -171,6 +183,8 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           provenance: false
+          build-args: |
+            LITELLM_PRICING_URL=${{ env.LITELLM_PRICING_URL }}
           # push-by-digest emits only an arch-specific manifest blob (no tag).
           # The downstream docker-manifest job stitches them into a multi-arch
           # tag list so the release publishes one logical image, not two.

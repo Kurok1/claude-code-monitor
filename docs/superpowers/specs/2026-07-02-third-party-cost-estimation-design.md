@@ -297,6 +297,6 @@ CostUsd sql.NullFloat64
 - **不做查询时动态重定价**(计算时机选了 ingest 时冻结)。
 - **不做历史行回填 / 重定价 job**(可作为后续独立任务)。
 - **不给 `codex_event_api_request` 加 cost**(它无 token)。
-- **不 vendor LiteLLM JSON 进仓库**(运维自备本地文件)。
+- **不 vendor LiteLLM JSON 进仓库 source**;但 **release 压缩包与 docker 镜像在 CI 构建时下载并内置一份** `litellm.json` 作为开箱基线(release 包 `pricing/litellm.json`;镜像 `/etc/claude-code-monitor/pricing/litellm.json`),见 `.github/workflows/release.yml` 与 `Dockerfile`。仓库 git tree 仍不含该文件。
 - **不在其他表(未来第三方客户端)上落 cost 列**:引擎已客户端无关,届时按 §5/§6 机械复制即可,本期只接 `codex_event_token_usage`。
 - **不新增溯源列**(`pricing_source` / `pricing_version` 等)。

@@ -51,7 +51,7 @@ logging:
 # 第三方模型成本估算(Codex 等不自报 cost_usd 的客户端)。默认关闭。
 # pricing:
 #   enabled: true
-#   source_file: ./pricing/litellm.json   # 必填基线(LiteLLM 格式 JSON,仓库不带,自备)
+#   source_file: ./pricing/litellm.json   # 必填基线(LiteLLM 格式 JSON;release 压缩包已随附,从源码构建则自备)
 #   source_url: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"  # 可选刷新源
 #   refresh_interval: 24h
 #   overrides:                             # 可选:手写/覆盖个别型号单价(每单 token 美元)
