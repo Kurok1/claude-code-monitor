@@ -507,3 +507,17 @@ func TestSnapshotCostEstimatedFlag(t *testing.T) {
 		t.Fatal("codex view with pricing disabled must not be estimated")
 	}
 }
+
+func TestHeatmapCodexWeightGating(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	weights := HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}
+	// Both signatures must run; disabled=2-weight is asserted numerically in
+	// TestBuildHeatmap_CodexWeightDenominator.
+	if _, err := BuildHeatmap(ctx, db, w, weights, ClientCodex, false); err != nil {
+		t.Fatalf("disabled: %v", err)
+	}
+	if _, err := BuildHeatmap(ctx, db, w, weights, ClientCodex, true); err != nil {
+		t.Fatalf("enabled: %v", err)
+	}
+}

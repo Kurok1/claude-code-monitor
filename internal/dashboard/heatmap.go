@@ -18,7 +18,7 @@ import (
 // series, then computes each day's composite Score normalized against the
 // window max for each metric (see HeatmapResponse doc). Queries are
 // sequential — DuckDB MaxOpenConns=1 makes parallelism pointless.
-func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights HeatmapWeights, client Client) (HeatmapResponse, error) {
+func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights HeatmapWeights, client Client, pricingEnabled bool) (HeatmapResponse, error) {
 	resp := HeatmapResponse{
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		Days:      heatmapDays,
@@ -81,10 +81,12 @@ func BuildHeatmap(ctx context.Context, db *sql.DB, w TimeWindow, weights Heatmap
 		d = d.AddDate(0, 0, 1)
 	}
 
-	// Codex has no cost data: keeping the cost weight in the denominator
-	// would systematically depress every codex-only score, so drop it there.
+	// Codex cost is estimated and only present when pricing is enabled. When
+	// pricing is off, codex cost is always NULL/0, so drop the cost weight to
+	// avoid systematically depressing codex-only scores (stage-two behavior).
+	// When pricing is on, keep all three weights so codex matches all/claude.
 	wsum := weights.Tokens + weights.Cost + weights.Requests
-	if client == ClientCodex {
+	if client == ClientCodex && !pricingEnabled {
 		wsum = weights.Tokens + weights.Requests
 	}
 	for i := range points {

@@ -252,7 +252,7 @@ func TestBuildHeatmap_CodexWeightDenominator(t *testing.T) {
 	insertCodexTokenUsage(t, db, ts, "conv-h", "gpt-5.5", 100, 50, 0, 0)
 
 	weights := HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}
-	resp, err := BuildHeatmap(context.Background(), db, w, weights, ClientCodex)
+	resp, err := BuildHeatmap(context.Background(), db, w, weights, ClientCodex, false)
 	if err != nil {
 		t.Fatalf("BuildHeatmap: %v", err)
 	}

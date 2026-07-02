@@ -168,7 +168,7 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		Tokens:   h.cfg.Heatmap.WTokens,
 		Cost:     h.cfg.Heatmap.WCost,
 		Requests: h.cfg.Heatmap.WRequests,
-	}, client)
+	}, client, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("heatmap: build", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
