@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kuroky/claude-code-monitor/internal/config"
+	"github.com/kuroky/claude-code-monitor/internal/pricing"
 	"github.com/kuroky/claude-code-monitor/internal/store"
 )
 
@@ -25,6 +26,7 @@ import (
 type Server struct {
 	cfg         config.StatsConfig
 	writer      *store.BufferedWriter
+	pricing     *pricing.Engine
 	log         *slog.Logger
 	startTime   time.Time
 	srv         *http.Server
@@ -32,10 +34,11 @@ type Server struct {
 	apiHandler  http.Handler
 }
 
-func NewServer(cfg config.StatsConfig, writer *store.BufferedWriter, log *slog.Logger) *Server {
+func NewServer(cfg config.StatsConfig, writer *store.BufferedWriter, engine *pricing.Engine, log *slog.Logger) *Server {
 	return &Server{
 		cfg:       cfg,
 		writer:    writer,
+		pricing:   engine,
 		log:       log,
 		startTime: time.Now(),
 	}
@@ -153,6 +156,23 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		m := stats[name]
 		fmt.Fprintf(&b, "%-34s %10d %10d %10d %12d %10d\n",
 			name, m.Appended, m.Flushed, m.Dropped, m.FlushErrors, pending[name])
+	}
+
+	if s.pricing != nil {
+		ps := s.pricing.Stats()
+		fmt.Fprintf(&b, "\n# pricing\n")
+		fmt.Fprintf(&b, "pricing_enabled        %t\n", ps.Enabled)
+		fmt.Fprintf(&b, "pricing_entries        %d\n", ps.Entries)
+		fmt.Fprintf(&b, "pricing_last_refresh   %s ok=%t src=%s\n",
+			ps.LastRefreshAt.Format(time.RFC3339), ps.LastRefreshOK, ps.LastRefreshSource)
+		unmatched := make([]string, 0, len(ps.Unmatched))
+		for model := range ps.Unmatched {
+			unmatched = append(unmatched, model)
+		}
+		sort.Strings(unmatched)
+		for _, model := range unmatched {
+			fmt.Fprintf(&b, "pricing_unmatched      %-40s %d\n", model, ps.Unmatched[model])
+		}
 	}
 
 	_, _ = io.WriteString(w, b.String())

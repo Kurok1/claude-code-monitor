@@ -26,3 +26,10 @@ dashboard:
 logging:
   level: "info"
   format: "json"
+
+# 第三方模型成本估算(Codex 等)。默认关闭。启用时 source_file 需挂载进容器。
+# pricing:
+#   enabled: true
+#   source_file: /data/pricing/litellm.json
+#   source_url: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+#   refresh_interval: 24h

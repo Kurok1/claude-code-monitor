@@ -95,7 +95,7 @@ func run() error {
 	}
 	writer.Start()
 
-	statsSrv := stats.NewServer(cfg.Stats, writer, slog.Default())
+	statsSrv := stats.NewServer(cfg.Stats, writer, priceEngine, slog.Default())
 	if webHandler, err := web.Handler(); err == nil {
 		statsSrv.SetRootHandler(webHandler)
 	} else {

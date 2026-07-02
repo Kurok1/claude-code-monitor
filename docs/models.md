@@ -650,7 +650,7 @@ DuckDB 单文件长期增长后查询性能下降。建议：
 |---|---|
 | `codex_event_conversation_starts` | `provider_name`、`reasoning_effort`、`reasoning_summary`、`context_window` BIGINT、`auto_compact_token_limit` BIGINT、`approval_policy`、`sandbox_policy`、`mcp_servers` |
 | `codex_event_api_request` | `duration_ms` BIGINT、`status_code` INTEGER、`error`、`attempt` BIGINT、`endpoint` |
-| `codex_event_token_usage` | `input_token_count` / `output_token_count` / `cached_token_count` / `reasoning_token_count` / `tool_token_count` BIGINT、`service_tier`、`model_reasoning_effort`、`duration_ms` BIGINT |
+| `codex_event_token_usage` | `input_token_count` / `output_token_count` / `cached_token_count` / `reasoning_token_count` / `tool_token_count` BIGINT、`service_tier`、`model_reasoning_effort`、`duration_ms` BIGINT、`cost_usd` DOUBLE（v2.4.0；ingest 时由 `internal/pricing` 按 LiteLLM 计价表估算，未匹配/计价关闭时为 NULL） |
 | `codex_event_user_prompt` | `prompt_length` INTEGER、`prompt`（默认 `[REDACTED]`） |
 | `codex_event_tool_decision` | `tool_name`、`call_id`、`decision`（Codex 原始枚举）、`source` |
 | `codex_event_tool_result` | `tool_name`、`call_id`、`duration_ms` BIGINT、`success` BOOLEAN、`mcp_server`、`mcp_server_origin`、`arguments_length` / `output_length` BIGINT |
@@ -660,4 +660,4 @@ DuckDB 单文件长期增长后查询性能下降。建议：
 - `codex.sse_event` 仅 `event.kind = response.completed` 写入 `codex_event_token_usage`，其余 kind 由 dispatcher 计入 skipped，不持久化
 - `codex_event_tool_result` 的 `arguments` / `output` 原文在解析层即丢弃（只算字节长度），**不落任何列也不落 `attrs`**——Codex 默认不脱敏且无客户端开关，这是接收端的隐私红线
 - token 统计口径为子集式（`cached ⊂ input`、`reasoning ⊂ output`），与 Claude 并列式不同：Codex 总量 = `input_token_count + output_token_count`，不可再加 cached
-- Codex 无成本数据，`metric_cost_usage` 等 Claude 表不受影响，两族表互不交叉
+- Codex 不上报成本；`cost_usd` 由 `internal/pricing` 在 ingest 时按 LiteLLM 计价表**估算**后落列（默认关闭，见 §配置 `pricing`）。Claude 仍用自报的权威 `cost_usd`（`metric_cost_usage`），不重算；两族表互不交叉
