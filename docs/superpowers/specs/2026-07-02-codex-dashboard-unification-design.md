@@ -1,7 +1,7 @@
 # 设计:dashboard 查询层统一(Codex 阶段二)
 
 - 日期:2026-07-02
-- 状态:已评审通过,待实现
+- 状态:已实现（feat/codex-dashboard 分支）
 - 前置:阶段一(v2.2.0)已完成 Codex 遥测落库,见 `2026-07-01-codex-otel-support-design.md`
 
 ---
