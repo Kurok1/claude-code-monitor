@@ -1,5 +1,5 @@
 -- @author Kurok1 <im.kurokyhanc@gmail.com>
--- @since v2.1.0
+-- @since v2.2.0
 -- 6 张 Codex 事件表（v1 核心用量）。Schema source: docs/superpowers/specs/2026-07-01-codex-otel-support-design.md §4。
 -- 公共列约定：无 user_id NOT NULL 约束（Codex 身份字段天然可空）。
 

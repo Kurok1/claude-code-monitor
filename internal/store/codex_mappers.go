@@ -1,6 +1,6 @@
 /**
  * @author Kurok1 <im.kurokyhanc@gmail.com>
- * @since v2.1.0
+ * @since v2.2.0
  */
 
 package store
