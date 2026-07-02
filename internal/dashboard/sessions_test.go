@@ -92,7 +92,7 @@ func TestBuildSessionDetail_BucketsTail(t *testing.T) {
 	insertSessionRow(t, db, "event_api_request", "sess-X", base)
 
 	// Top-2 tools → Bash(5), Read(4); the rest (3+2+1=6) fold into "其他".
-	resp, found, err := BuildSessionDetail(context.Background(), db, "sess-X", ClientAll, 2, 10)
+	resp, found, err := BuildSessionDetail(context.Background(), db, "sess-X", ClientAll, 2, 10, false)
 	if err != nil {
 		t.Fatalf("BuildSessionDetail: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestBuildSessionDetail_BucketsTail(t *testing.T) {
 	}
 
 	// Unknown session → found=false.
-	_, found, err = BuildSessionDetail(context.Background(), db, "ghost", ClientAll, 10, 10)
+	_, found, err = BuildSessionDetail(context.Background(), db, "ghost", ClientAll, 10, 10, false)
 	if err != nil {
 		t.Fatalf("BuildSessionDetail unknown: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestBuildSessionList_OrdersByLastActivity(t *testing.T) {
 	insertSessionRow(t, db, "event_api_request", "new", t0.Add(3*time.Hour))
 	insertSessionTokenUsage(t, db, "new", t0.Add(3*time.Hour), 500)
 
-	resp, err := BuildSessionList(context.Background(), db, ClientAll, 30)
+	resp, err := BuildSessionList(context.Background(), db, ClientAll, 30, false)
 	if err != nil {
 		t.Fatalf("BuildSessionList: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestBuildSessionList_OrdersByLastActivity(t *testing.T) {
 	}
 
 	// limit clamps the row count.
-	resp, err = BuildSessionList(context.Background(), db, ClientAll, 2)
+	resp, err = BuildSessionList(context.Background(), db, ClientAll, 2, false)
 	if err != nil {
 		t.Fatalf("BuildSessionList limit: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestSession_PromptOnly(t *testing.T) {
 
 	ctx := context.Background()
 
-	list, err := BuildSessionList(ctx, db, ClientAll, 30)
+	list, err := BuildSessionList(ctx, db, ClientAll, 30, false)
 	if err != nil {
 		t.Fatalf("BuildSessionList: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestSession_PromptOnly(t *testing.T) {
 		t.Errorf("prompt-only counts should be zero: %+v", s)
 	}
 
-	detail, found, err := BuildSessionDetail(ctx, db, "prompt-only", ClientAll, 10, 10)
+	detail, found, err := BuildSessionDetail(ctx, db, "prompt-only", ClientAll, 10, 10, false)
 	if err != nil {
 		t.Fatalf("BuildSessionDetail: %v", err)
 	}

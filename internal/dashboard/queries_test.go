@@ -521,3 +521,34 @@ func TestHeatmapCodexWeightGating(t *testing.T) {
 		t.Fatalf("enabled: %v", err)
 	}
 }
+
+func TestSessionDetailCost(t *testing.T) {
+	db, _, now := testDB(t)
+	ctx := context.Background()
+
+	// claude session: authoritative cost + some activity so it's found.
+	if _, err := db.Exec(`INSERT INTO metric_cost_usage (ts, start_ts, value, user_id, session_id, model) VALUES (?, ?, 2.0, 'u', 'sess-claude', 'claude-opus-4-1')`, now, now); err != nil {
+		t.Fatalf("seed claude cost: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_api_request (ts, user_id, session_id, model) VALUES (?, 'u', 'sess-claude', 'claude-opus-4-1')`, now); err != nil {
+		t.Fatalf("seed claude activity: %v", err)
+	}
+	resp, found, err := BuildSessionDetail(ctx, db, "sess-claude", ClientClaude, 5, 5, true)
+	if err != nil || !found {
+		t.Fatalf("claude detail: found=%v err=%v", found, err)
+	}
+	if resp.Cost == nil || *resp.Cost != 2.0 || resp.CostEstimated {
+		t.Fatalf("claude cost should be authoritative 2.0, got %+v estimated=%v", resp.Cost, resp.CostEstimated)
+	}
+
+	// codex session: estimated cost, gated on pricingEnabled.
+	insertCodexCostRow(t, db, now, "gpt-5.5", sql.NullFloat64{Float64: 0.5, Valid: true}) // conversation_id = conv-1
+	on, found, _ := BuildSessionDetail(ctx, db, "conv-1", ClientCodex, 5, 5, true)
+	if !found || on.Cost == nil || *on.Cost != 0.5 || !on.CostEstimated {
+		t.Fatalf("codex enabled cost wrong: cost=%v estimated=%v found=%v", on.Cost, on.CostEstimated, found)
+	}
+	off, _, _ := BuildSessionDetail(ctx, db, "conv-1", ClientCodex, 5, 5, false)
+	if off.Cost != nil {
+		t.Fatalf("codex disabled cost must be nil, got %v", *off.Cost)
+	}
+}

@@ -732,6 +732,7 @@ type sessionListRow struct {
 	Requests  int64
 	ToolCalls int64
 	Skills    int64
+	Cost      float64 // claude authoritative (metric_cost_usage) or codex estimated (cost_usd)
 }
 
 const claudeActivityArms = `
@@ -790,7 +791,11 @@ func QuerySessionList(ctx context.Context, db *sql.DB, client Client, limit int)
 		  CASE WHEN s.client = 'claude'
 		    THEN (SELECT COUNT(*) FROM event_skill_activated sk WHERE sk.session_id = s.session_id)
 		    ELSE 0
-		  END AS skills
+		  END AS skills,
+		  CASE WHEN s.client = 'claude'
+		    THEN COALESCE((SELECT SUM(value) FROM metric_cost_usage mc WHERE mc.session_id = s.session_id), 0)
+		    ELSE COALESCE((SELECT SUM(cost_usd) FROM codex_event_token_usage xc WHERE xc.conversation_id = s.session_id), 0)
+		  END AS cost
 		FROM sess s
 		ORDER BY s.last_ts DESC
 	`
@@ -803,7 +808,7 @@ func QuerySessionList(ctx context.Context, db *sql.DB, client Client, limit int)
 	var out []sessionListRow
 	for rows.Next() {
 		var r sessionListRow
-		if err := rows.Scan(&r.SessionID, &r.Client, &r.FirstTs, &r.LastTs, &r.Tokens, &r.Requests, &r.ToolCalls, &r.Skills); err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Client, &r.FirstTs, &r.LastTs, &r.Tokens, &r.Requests, &r.ToolCalls, &r.Skills, &r.Cost); err != nil {
 			return nil, fmt.Errorf("scan session list row: %w", err)
 		}
 		out = append(out, r)
@@ -888,4 +893,24 @@ func QueryCodexSessionToolBreakdown(ctx context.Context, db *sql.DB, conversatio
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// QueryClaudeSessionCost returns a claude session's authoritative all-time cost.
+func QueryClaudeSessionCost(ctx context.Context, db *sql.DB, sessionID string) (float64, error) {
+	const q = `SELECT COALESCE(SUM(value), 0) FROM metric_cost_usage WHERE session_id = ?`
+	var v float64
+	if err := db.QueryRowContext(ctx, q, sessionID).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query claude session cost: %w", err)
+	}
+	return v, nil
+}
+
+// QueryCodexSessionCost returns a codex conversation's estimated all-time cost.
+func QueryCodexSessionCost(ctx context.Context, db *sql.DB, conversationID string) (float64, error) {
+	const q = `SELECT COALESCE(SUM(cost_usd), 0) FROM codex_event_token_usage WHERE conversation_id = ?`
+	var v float64
+	if err := db.QueryRowContext(ctx, q, conversationID).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query codex session cost: %w", err)
+	}
+	return v, nil
 }

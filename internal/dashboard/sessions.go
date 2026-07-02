@@ -20,7 +20,7 @@ const otherBucketLabel = "其他"
 // ClientAll probes claude first, then codex. found=false (with a nil error)
 // means the session id has no activity in any queried family — the handler
 // maps that to 404.
-func BuildSessionDetail(ctx context.Context, db *sql.DB, sessionID string, client Client, toolsTopN, skillsTopN int) (SessionDetailResponse, bool, error) {
+func BuildSessionDetail(ctx context.Context, db *sql.DB, sessionID string, client Client, toolsTopN, skillsTopN int, pricingEnabled bool) (SessionDetailResponse, bool, error) {
 	if client.includesClaude() {
 		resp, found, err := buildClaudeSessionDetail(ctx, db, sessionID, toolsTopN, skillsTopN)
 		if err != nil || found {
@@ -28,7 +28,7 @@ func BuildSessionDetail(ctx context.Context, db *sql.DB, sessionID string, clien
 		}
 	}
 	if client.includesCodex() {
-		return buildCodexSessionDetail(ctx, db, sessionID, toolsTopN)
+		return buildCodexSessionDetail(ctx, db, sessionID, toolsTopN, pricingEnabled)
 	}
 	return SessionDetailResponse{}, false, nil
 }
@@ -89,13 +89,18 @@ func buildClaudeSessionDetail(ctx context.Context, db *sql.DB, sessionID string,
 	if resp.Skills == nil {
 		resp.Skills = []SkillRank{}
 	}
+	cost, err := QueryClaudeSessionCost(ctx, db, sessionID)
+	if err != nil {
+		return SessionDetailResponse{}, false, err
+	}
+	resp.Cost = &cost // authoritative; CostEstimated stays false
 	return resp, true, nil
 }
 
 // buildCodexSessionDetail assembles the codex-family detail: tokens follow
 // the merged projection (total = input + output), requests count completed
 // responses, and there is no skill concept.
-func buildCodexSessionDetail(ctx context.Context, db *sql.DB, conversationID string, toolsTopN int) (SessionDetailResponse, bool, error) {
+func buildCodexSessionDetail(ctx context.Context, db *sql.DB, conversationID string, toolsTopN int, pricingEnabled bool) (SessionDetailResponse, bool, error) {
 	first, last, err := QueryCodexSessionTimespan(ctx, db, conversationID)
 	if err != nil {
 		return SessionDetailResponse{}, false, err
@@ -134,19 +139,27 @@ func buildCodexSessionDetail(ctx context.Context, db *sql.DB, conversationID str
 	if resp.Tools == nil {
 		resp.Tools = []ToolRank{}
 	}
+	if pricingEnabled {
+		cost, err := QueryCodexSessionCost(ctx, db, conversationID)
+		if err != nil {
+			return SessionDetailResponse{}, false, err
+		}
+		resp.Cost = &cost
+		resp.CostEstimated = true
+	}
 	return resp, true, nil
 }
 
 // BuildSessionList assembles GET /api/sessions. The caller is responsible for
 // clamping limit to a sane range (see parseLimit in handler.go).
-func BuildSessionList(ctx context.Context, db *sql.DB, client Client, limit int) (SessionListResponse, error) {
+func BuildSessionList(ctx context.Context, db *sql.DB, client Client, limit int, pricingEnabled bool) (SessionListResponse, error) {
 	rows, err := QuerySessionList(ctx, db, client, limit)
 	if err != nil {
 		return SessionListResponse{}, err
 	}
 	out := make([]SessionSummary, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, SessionSummary{
+		s := SessionSummary{
 			SessionID:        r.SessionID,
 			Client:           r.Client,
 			FirstActive:      r.FirstTs.UTC().Format(time.RFC3339),
@@ -155,7 +168,18 @@ func BuildSessionList(ctx context.Context, db *sql.DB, client Client, limit int)
 			Requests:         r.Requests,
 			ToolCalls:        r.ToolCalls,
 			SkillActivations: r.Skills,
-		})
+		}
+		if r.Client == "codex" {
+			if pricingEnabled {
+				c := r.Cost
+				s.Cost = &c
+				s.CostEstimated = true
+			}
+		} else {
+			c := r.Cost
+			s.Cost = &c // claude authoritative
+		}
+		out = append(out, s)
 	}
 	return SessionListResponse{
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),

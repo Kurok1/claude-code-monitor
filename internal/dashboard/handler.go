@@ -186,7 +186,7 @@ func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp, err := BuildSessionList(r.Context(), h.db, client, limit)
+	resp, err := BuildSessionList(r.Context(), h.db, client, limit, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("sessions: list", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -207,7 +207,7 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
+	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("sessions: detail", "err", err, "session_id", id)
 		writeError(w, http.StatusInternalServerError, "internal error")
