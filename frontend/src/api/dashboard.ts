@@ -9,7 +9,8 @@
 // names + optional user-configured rules. The frontend treats group ids
 // as arbitrary strings, picks colors via hash → palette, and derives a
 // display label/tier from the group key (Claude family pattern → branded
-// label; everything else → group name verbatim, tier "第三方模型").
+// label; OpenAI/Codex families → GPT/o-series branded label, tier "OpenAI";
+// everything else → group name verbatim, tier "第三方模型").
 
 import { getJSON } from './http';
 
@@ -128,6 +129,18 @@ const CLAUDE_TIER: Record<string, string> = {
 // opus/sonnet/haiku stay `family-MAJOR.MINOR`.
 const CLAUDE_GROUP_RE = /^(opus|sonnet|haiku|fable)-(\d+(?:\.\d+)?)$/;
 
+// OpenAI / Codex families (gpt-*, chatgpt-*, o1/o3/o4 reasoning) arrive via
+// Codex telemetry. Brand them like a first-party family instead of the generic
+// 第三方模型 tier. Checked after the Claude pattern, so `opus-*` never matches.
+const OPENAI_GROUP_RE = /^(gpt[-.\d]|chatgpt|o[1-9])/i;
+
+function openaiLabel(group: string): string {
+  return group
+    .replace(/^chatgpt/i, 'ChatGPT')
+    .replace(/^gpt/i, 'GPT')
+    .replace(/codex/i, 'Codex');
+}
+
 // Stable hash for deterministic color assignment. Same group string always
 // produces the same palette slot across reloads.
 function hashString(s: string): number {
@@ -156,6 +169,14 @@ export function metaForGroup(group: string): ModelMeta {
       id: group,
       label: `Claude ${capitalize(family)} ${ver}`,
       tier: CLAUDE_TIER[family] ?? '',
+      color: colorFor(group),
+    };
+  }
+  if (OPENAI_GROUP_RE.test(group)) {
+    return {
+      id: group,
+      label: openaiLabel(group),
+      tier: 'OpenAI',
       color: colorFor(group),
     };
   }
