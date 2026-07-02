@@ -75,6 +75,7 @@ export interface DashboardData {
     total: number;
     prev_total: number;
     sparkline: number[];
+    cost_estimated: boolean;
   };
   cache: {
     hit_rate: number | null;
@@ -184,6 +185,7 @@ interface SnapshotWire {
     total: number;
     prev_total: number;
     sparkline: number[];
+    cost_estimated: boolean;
   };
   cache: {
     hit_rate: number | null;
