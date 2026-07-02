@@ -179,7 +179,12 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 // active sessions, newest first. limit defaults to 30, clamped to [1, 200].
 func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	limit := parseLimit(r.URL.Query().Get("limit"), 30, 200)
-	resp, err := BuildSessionList(r.Context(), h.db, limit)
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := BuildSessionList(r.Context(), h.db, client, limit)
 	if err != nil {
 		h.log.Error("sessions: list", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -195,7 +200,12 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
 	if err != nil {
 		h.log.Error("sessions: detail", "err", err, "session_id", id)
 		writeError(w, http.StatusInternalServerError, "internal error")

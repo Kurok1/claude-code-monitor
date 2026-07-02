@@ -144,6 +144,7 @@ type HeatmapPoint struct {
 // (frontend formats to local). Counts are all-time for that session.
 type SessionSummary struct {
 	SessionID        string `json:"session_id"`
+	Client           string `json:"client"` // "claude" | "codex"
 	FirstActive      string `json:"first_active"`
 	LastActive       string `json:"last_active"`
 	Tokens           int64  `json:"tokens"`
@@ -165,6 +166,7 @@ type SessionListResponse struct {
 // breakdown sums equal ToolCalls / SkillActivations respectively.
 type SessionDetailResponse struct {
 	SessionID        string      `json:"session_id"`
+	Client           string      `json:"client"` // "claude" | "codex"
 	FirstActive      string      `json:"first_active"`
 	LastActive       string      `json:"last_active"`
 	Tokens           int64       `json:"tokens"`
@@ -173,4 +175,16 @@ type SessionDetailResponse struct {
 	SkillActivations int64       `json:"skill_activations"`
 	Tools            []ToolRank  `json:"tools"`
 	Skills           []SkillRank `json:"skills"`
+	// TokenDetail is codex-only: the four raw token dimensions
+	// (subset semantics: cached ⊂ input, reasoning ⊂ output). Nil for
+	// claude sessions.
+	TokenDetail *SessionTokenDetail `json:"token_detail,omitempty"`
+}
+
+// SessionTokenDetail carries codex raw token dimensions for the detail page.
+type SessionTokenDetail struct {
+	Input     int64 `json:"input"`
+	Output    int64 `json:"output"`
+	Cached    int64 `json:"cached"`
+	Reasoning int64 `json:"reasoning"`
 }

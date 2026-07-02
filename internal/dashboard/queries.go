@@ -699,6 +699,7 @@ func QuerySessionSkillBreakdown(ctx context.Context, db *sql.DB, sessionID strin
 // BuildSessionList formats the timestamps into the wire SessionSummary.
 type sessionListRow struct {
 	SessionID string
+	Client    string
 	FirstTs   time.Time
 	LastTs    time.Time
 	Tokens    int64
@@ -707,32 +708,63 @@ type sessionListRow struct {
 	Skills    int64
 }
 
-// QuerySessionList returns the `limit` most-recently-active sessions ordered
-// by last activity desc, each with all-time aggregate counts. The correlated
-// subqueries run only for the `limit` rows that survive the activity-union
-// ordering, so cost scales with `limit`, not table size.
-func QuerySessionList(ctx context.Context, db *sql.DB, limit int) ([]sessionListRow, error) {
-	const q = `
-		WITH activity AS (
-		  SELECT session_id, ts FROM event_api_request      WHERE session_id IS NOT NULL
-		  UNION ALL SELECT session_id, ts FROM event_tool_result     WHERE session_id IS NOT NULL
-		  UNION ALL SELECT session_id, ts FROM event_skill_activated WHERE session_id IS NOT NULL
-		  UNION ALL SELECT session_id, ts FROM event_user_prompt     WHERE session_id IS NOT NULL
-		  UNION ALL SELECT session_id, ts FROM metric_token_usage    WHERE session_id IS NOT NULL
+const claudeActivityArms = `
+	  SELECT session_id, ts, 'claude' AS client FROM event_api_request      WHERE session_id IS NOT NULL
+	  UNION ALL SELECT session_id, ts, 'claude' FROM event_tool_result     WHERE session_id IS NOT NULL
+	  UNION ALL SELECT session_id, ts, 'claude' FROM event_skill_activated WHERE session_id IS NOT NULL
+	  UNION ALL SELECT session_id, ts, 'claude' FROM event_user_prompt     WHERE session_id IS NOT NULL
+	  UNION ALL SELECT session_id, ts, 'claude' FROM metric_token_usage    WHERE session_id IS NOT NULL`
+
+const codexActivityArms = `
+	  SELECT conversation_id, ts, 'codex' AS client FROM codex_event_token_usage         WHERE conversation_id IS NOT NULL
+	  UNION ALL SELECT conversation_id, ts, 'codex' FROM codex_event_user_prompt         WHERE conversation_id IS NOT NULL
+	  UNION ALL SELECT conversation_id, ts, 'codex' FROM codex_event_tool_result         WHERE conversation_id IS NOT NULL
+	  UNION ALL SELECT conversation_id, ts, 'codex' FROM codex_event_conversation_starts WHERE conversation_id IS NOT NULL`
+
+// QuerySessionList returns the `limit` most-recently-active sessions across
+// the requested arms, ordered by last activity desc, each with all-time
+// aggregate counts. Column 1 of every activity arm binds to session_id by
+// position, so codex conversations surface their conversation_id there. The
+// correlated subqueries run only for the `limit` surviving rows.
+func QuerySessionList(ctx context.Context, db *sql.DB, client Client, limit int) ([]sessionListRow, error) {
+	var arms string
+	switch client {
+	case ClientClaude:
+		arms = claudeActivityArms
+	case ClientCodex:
+		arms = codexActivityArms
+	default:
+		arms = claudeActivityArms + "\n	  UNION ALL " + codexActivityArms
+	}
+	q := `
+		WITH activity(session_id, ts, client) AS (` + arms + `
 		),
 		sess AS (
-		  SELECT session_id, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+		  SELECT session_id, client, MIN(ts) AS first_ts, MAX(ts) AS last_ts
 		  FROM activity
-		  GROUP BY session_id
+		  GROUP BY session_id, client
 		  ORDER BY last_ts DESC
 		  LIMIT ?
 		)
 		SELECT
-		  s.session_id, s.first_ts, s.last_ts,
-		  COALESCE((SELECT SUM(value) FROM metric_token_usage  t  WHERE t.session_id  = s.session_id), 0) AS tokens,
-		  (SELECT COUNT(*) FROM event_api_request      r  WHERE r.session_id  = s.session_id) AS requests,
-		  (SELECT COUNT(*) FROM event_tool_result      tr WHERE tr.session_id = s.session_id) AS tool_calls,
-		  (SELECT COUNT(*) FROM event_skill_activated  sk WHERE sk.session_id = s.session_id) AS skills
+		  s.session_id, s.client, s.first_ts, s.last_ts,
+		  CASE WHEN s.client = 'claude'
+		    THEN COALESCE((SELECT SUM(value) FROM metric_token_usage t WHERE t.session_id = s.session_id), 0)
+		    ELSE COALESCE((SELECT SUM(COALESCE(input_token_count, 0) + COALESCE(output_token_count, 0))
+		                   FROM codex_event_token_usage x WHERE x.conversation_id = s.session_id), 0)
+		  END AS tokens,
+		  CASE WHEN s.client = 'claude'
+		    THEN (SELECT COUNT(*) FROM event_api_request r WHERE r.session_id = s.session_id)
+		    ELSE (SELECT COUNT(*) FROM codex_event_token_usage x WHERE x.conversation_id = s.session_id)
+		  END AS requests,
+		  CASE WHEN s.client = 'claude'
+		    THEN (SELECT COUNT(*) FROM event_tool_result tr WHERE tr.session_id = s.session_id)
+		    ELSE (SELECT COUNT(*) FROM codex_event_tool_result xt WHERE xt.conversation_id = s.session_id)
+		  END AS tool_calls,
+		  CASE WHEN s.client = 'claude'
+		    THEN (SELECT COUNT(*) FROM event_skill_activated sk WHERE sk.session_id = s.session_id)
+		    ELSE 0
+		  END AS skills
 		FROM sess s
 		ORDER BY s.last_ts DESC
 	`
@@ -745,8 +777,87 @@ func QuerySessionList(ctx context.Context, db *sql.DB, limit int) ([]sessionList
 	var out []sessionListRow
 	for rows.Next() {
 		var r sessionListRow
-		if err := rows.Scan(&r.SessionID, &r.FirstTs, &r.LastTs, &r.Tokens, &r.Requests, &r.ToolCalls, &r.Skills); err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Client, &r.FirstTs, &r.LastTs, &r.Tokens, &r.Requests, &r.ToolCalls, &r.Skills); err != nil {
 			return nil, fmt.Errorf("scan session list row: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Codex sessions (conversation_id keyed)
+// ─────────────────────────────────────────────────────────────────────
+
+// QueryCodexSessionTimespan mirrors QuerySessionTimespan for one codex
+// conversation. Both NULL ⇒ unknown conversation.
+func QueryCodexSessionTimespan(ctx context.Context, db *sql.DB, conversationID string) (first, last sql.NullTime, err error) {
+	const q = `
+		WITH activity AS (
+		  SELECT ts FROM codex_event_token_usage         WHERE conversation_id = ?
+		  UNION ALL SELECT ts FROM codex_event_user_prompt         WHERE conversation_id = ?
+		  UNION ALL SELECT ts FROM codex_event_tool_result         WHERE conversation_id = ?
+		  UNION ALL SELECT ts FROM codex_event_conversation_starts WHERE conversation_id = ?
+		)
+		SELECT MIN(ts), MAX(ts) FROM activity
+	`
+	row := db.QueryRowContext(ctx, q, conversationID, conversationID, conversationID, conversationID)
+	if err = row.Scan(&first, &last); err != nil {
+		return first, last, fmt.Errorf("query codex session timespan: %w", err)
+	}
+	return first, last, nil
+}
+
+// QueryCodexSessionTokens returns the merged total plus the four raw
+// dimensions for the detail card.
+func QueryCodexSessionTokens(ctx context.Context, db *sql.DB, conversationID string) (total int64, detail SessionTokenDetail, err error) {
+	const q = `
+		SELECT
+		  COALESCE(SUM(COALESCE(input_token_count, 0) + COALESCE(output_token_count, 0)), 0),
+		  COALESCE(SUM(COALESCE(input_token_count, 0)), 0),
+		  COALESCE(SUM(COALESCE(output_token_count, 0)), 0),
+		  COALESCE(SUM(COALESCE(cached_token_count, 0)), 0),
+		  COALESCE(SUM(COALESCE(reasoning_token_count, 0)), 0)
+		FROM codex_event_token_usage
+		WHERE conversation_id = ?
+	`
+	err = db.QueryRowContext(ctx, q, conversationID).Scan(&total, &detail.Input, &detail.Output, &detail.Cached, &detail.Reasoning)
+	if err != nil {
+		return 0, detail, fmt.Errorf("query codex session tokens: %w", err)
+	}
+	return total, detail, nil
+}
+
+// QueryCodexSessionRequests — completed-response count for one conversation.
+func QueryCodexSessionRequests(ctx context.Context, db *sql.DB, conversationID string) (int64, error) {
+	const q = `SELECT COUNT(*) FROM codex_event_token_usage WHERE conversation_id = ?`
+	var v int64
+	if err := db.QueryRowContext(ctx, q, conversationID).Scan(&v); err != nil {
+		return 0, fmt.Errorf("query codex session requests: %w", err)
+	}
+	return v, nil
+}
+
+// QueryCodexSessionToolBreakdown mirrors QuerySessionToolBreakdown.
+func QueryCodexSessionToolBreakdown(ctx context.Context, db *sql.DB, conversationID string) ([]ToolRank, error) {
+	const q = `
+		SELECT tool_name AS name, COUNT(*) AS count
+		FROM codex_event_tool_result
+		WHERE conversation_id = ? AND tool_name IS NOT NULL
+		GROUP BY tool_name
+		ORDER BY count DESC, name
+	`
+	rows, err := db.QueryContext(ctx, q, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("query codex session tool breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ToolRank
+	for rows.Next() {
+		var r ToolRank
+		if err := rows.Scan(&r.Name, &r.Count); err != nil {
+			return nil, fmt.Errorf("scan codex session tool: %w", err)
 		}
 		out = append(out, r)
 	}

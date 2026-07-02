@@ -268,3 +268,86 @@ func TestBuildHeatmap_CodexWeightDenominator(t *testing.T) {
 		t.Errorf("max score = %v, want 1.0 (cost weight must leave the denominator for codex)", maxScore)
 	}
 }
+
+func TestSessionList_MixedClients(t *testing.T) {
+	db, w, _ := testDB(t)
+	base := w.TodayStartUTC.Add(time.Hour)
+	// Claude 会话
+	_, err := db.Exec(`INSERT INTO event_api_request (ts, user_id, session_id, model) VALUES (?, 'u', 'sess-c', 'claude-opus-4-1')`, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertTokenUsageSession(t, db, base, "sess-c", "input", 100)
+	// Codex 会话(更晚活动 → 排前)
+	insertCodexTokenUsage(t, db, base.Add(time.Hour), "conv-x", "gpt-5.5", 1000, 200, 400, 0)
+	insertCodexToolResult(t, db, base.Add(time.Hour), "conv-x", "exec_command")
+	insertCodexUserPrompt(t, db, base.Add(2*time.Hour), "conv-x")
+
+	rows, err := QuerySessionList(context.Background(), db, ClientAll, 10)
+	if err != nil {
+		t.Fatalf("QuerySessionList: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0].SessionID != "conv-x" || rows[0].Client != "codex" {
+		t.Errorf("row0 = %+v, want codex conv-x first", rows[0])
+	}
+	if rows[0].Tokens != 1200 || rows[0].Requests != 1 || rows[0].ToolCalls != 1 || rows[0].Skills != 0 {
+		t.Errorf("codex row = %+v, want tokens=1200 requests=1 tools=1 skills=0", rows[0])
+	}
+	if rows[1].SessionID != "sess-c" || rows[1].Client != "claude" {
+		t.Errorf("row1 = %+v, want claude sess-c", rows[1])
+	}
+
+	codexOnly, err := QuerySessionList(context.Background(), db, ClientCodex, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codexOnly) != 1 || codexOnly[0].SessionID != "conv-x" {
+		t.Errorf("ClientCodex rows = %+v, want only conv-x", codexOnly)
+	}
+}
+
+func TestSessionDetail_Codex(t *testing.T) {
+	db, w, _ := testDB(t)
+	ts := w.TodayStartUTC.Add(time.Hour)
+	insertCodexConversationStarts(t, db, ts, "conv-d")
+	insertCodexTokenUsage(t, db, ts.Add(time.Minute), "conv-d", "gpt-5.5", 1000, 200, 400, 50)
+	insertCodexToolResult(t, db, ts.Add(2*time.Minute), "conv-d", "exec_command")
+	insertCodexToolResult(t, db, ts.Add(3*time.Minute), "conv-d", "web_search")
+
+	resp, found, err := BuildSessionDetail(context.Background(), db, "conv-d", ClientCodex, 10, 10)
+	if err != nil || !found {
+		t.Fatalf("BuildSessionDetail: found=%v err=%v", found, err)
+	}
+	if resp.Client != "codex" {
+		t.Errorf("client = %q, want codex", resp.Client)
+	}
+	if resp.Tokens != 1200 || resp.Requests != 1 || resp.ToolCalls != 2 || resp.SkillActivations != 0 {
+		t.Errorf("resp = %+v, want tokens=1200 requests=1 tools=2 skills=0", resp)
+	}
+	if resp.TokenDetail == nil ||
+		resp.TokenDetail.Input != 1000 || resp.TokenDetail.Output != 200 ||
+		resp.TokenDetail.Cached != 400 || resp.TokenDetail.Reasoning != 50 {
+		t.Errorf("token_detail = %+v, want 1000/200/400/50", resp.TokenDetail)
+	}
+
+	// 无 hint(ClientAll)时按 claude → codex 顺序探测,也应命中
+	_, found, err = BuildSessionDetail(context.Background(), db, "conv-d", ClientAll, 10, 10)
+	if err != nil || !found {
+		t.Errorf("probe with ClientAll: found=%v err=%v", found, err)
+	}
+}
+
+// insertTokenUsageSession 补一个带 session_id 的 Claude token 种子。
+func insertTokenUsageSession(t *testing.T, db *sql.DB, ts time.Time, sessionID, typ string, value int64) {
+	t.Helper()
+	_, err := db.Exec(`
+		INSERT INTO metric_token_usage (ts, start_ts, value, user_id, session_id, model, type)
+		VALUES (?, ?, ?, 'u', ?, 'claude-opus-4-1', ?)
+	`, ts, ts, value, sessionID, typ)
+	if err != nil {
+		t.Fatalf("insert token_usage(session): %v", err)
+	}
+}
