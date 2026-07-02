@@ -28,6 +28,7 @@ func (s *LogsService) Export(
 		"resource_count", len(req.ResourceLogs),
 		"rows", summary.EventRows,
 		"unknown", summary.Unknown,
+		"skipped", summary.Skipped,
 		"errors", summary.Errors,
 	)
 	return &logspb.ExportLogsServiceResponse{}, nil

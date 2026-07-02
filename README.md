@@ -102,6 +102,20 @@ export OTEL_METRIC_EXPORT_INTERVAL=10000   # 调试可短，生产改回 60000
 export OTEL_LOGS_EXPORT_INTERVAL=5000
 ```
 
+### 3.1（可选）把 OpenAI Codex CLI 指向本服务
+
+Codex **不读取标准 OTEL 环境变量**，只认 `~/.codex/config.toml` 的 `[otel]` 段；其 Logs 导出默认关闭，需要显式配置：
+
+```toml
+[otel]
+environment = "prod"
+exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317" } }
+metrics_exporter = "none"   # 不配置的话 metrics 默认发往 OpenAI 自己的 Statsig 端点
+# log_user_prompt = true    # 可选：上报 prompt 原文（默认 "[REDACTED]"）
+```
+
+Codex 事件落入 6 张 `codex_event_*` 表（会话 / API 请求 / token 用量 / prompt / 工具决策与结果），详见 `docs/protocol.md` §7 与 `docs/models.md` §7。注意：Codex 不上报成本（cost_usd），token 计数是子集式口径（cached ⊂ input、reasoning ⊂ output）。
+
 ### 4. 查询
 
 ```bash
@@ -134,6 +148,13 @@ duckdb data/monitor.duckdb "
   UNION ALL
   SELECT 'tool'   , ts FROM event_tool_result WHERE prompt_id = '<UUID>'
   ORDER BY ts;"
+
+# Codex token 用量（注意子集式口径：总量 = input + output，不加 cached）
+duckdb data/monitor.duckdb "
+  SELECT model, SUM(input_token_count + output_token_count) AS tokens
+  FROM codex_event_token_usage
+  WHERE ts >= now() - INTERVAL 1 DAY
+  GROUP BY 1 ORDER BY 2 DESC;"
 ```
 
 未识别的 attribute 都落在每张表的 `attrs` 列（VARCHAR，内容是 JSON 文本），需要时用 `json_extract_string(attrs, '$."key.name"')` 提取。

@@ -3,6 +3,7 @@ package otlp
 import (
 	"errors"
 	"log/slog"
+	"strings"
 
 	logspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -17,6 +18,7 @@ type DispatchSummary struct {
 	MetricRows map[string]int // metric name → rows successfully parsed
 	EventRows  map[string]int // event.name → rows successfully parsed
 	Unknown    map[string]int // names we have no parser for
+	Skipped    map[string]int // recognized but intentionally not persisted (e.g. non-completed codex.sse_event)
 	Errors     int            // parse failures (data shape unexpected etc.)
 }
 
@@ -32,6 +34,7 @@ func NewDispatcher(log *slog.Logger, sink Sink) *Dispatcher {
 var (
 	errUnknownMetric = errors.New("unknown metric")
 	errUnknownEvent  = errors.New("unknown event")
+	errSkippedEvent  = errors.New("skipped event")
 )
 
 func (d *Dispatcher) DispatchMetrics(req *metricspb.ExportMetricsServiceRequest) DispatchSummary {
@@ -70,12 +73,16 @@ func (d *Dispatcher) DispatchLogs(req *logspb.ExportLogsServiceRequest) Dispatch
 	summary := DispatchSummary{
 		EventRows: make(map[string]int),
 		Unknown:   make(map[string]int),
+		Skipped:   make(map[string]int),
 	}
 	for _, rl := range req.ResourceLogs {
 		resourceAttrs := rl.Resource.GetAttributes()
 		for _, sl := range rl.ScopeLogs {
 			for _, lr := range sl.LogRecords {
 				name := lookupAttr(lr.Attributes, "event.name")
+				if name == "" {
+					name = lr.EventName // OTLP >= 1.4 top-level field (defensive; codex sets the attribute)
+				}
 				if name == "" {
 					summary.Unknown["<no_event_name>"]++
 					continue
@@ -84,6 +91,8 @@ func (d *Dispatcher) DispatchLogs(req *logspb.ExportLogsServiceRequest) Dispatch
 				switch {
 				case errors.Is(err, errUnknownEvent):
 					summary.Unknown[name]++
+				case errors.Is(err, errSkippedEvent):
+					summary.Skipped[name]++
 				case err != nil:
 					d.log.Warn("event parse failed", "event", name, "err", err)
 					summary.Errors++
@@ -164,6 +173,9 @@ func (d *Dispatcher) dispatchMetric(name string, dp *mpb.NumberDataPoint, resour
 }
 
 func (d *Dispatcher) dispatchEvent(name string, rec *lpb.LogRecord, resourceAttrs []*commonpb.KeyValue) error {
+	if strings.HasPrefix(name, "codex.") {
+		return d.dispatchCodexEvent(name, rec, resourceAttrs)
+	}
 	switch name {
 	case "user_prompt":
 		r, err := parseUserPrompt(rec, resourceAttrs)
@@ -233,6 +245,55 @@ func (d *Dispatcher) dispatchEvent(name string, rec *lpb.LogRecord, resourceAttr
 		return d.sink.AppendEvent(r)
 	}
 	return errUnknownEvent
+}
+
+// dispatchCodexEvent routes the codex.* event family (spec:
+// docs/superpowers/specs/2026-07-01-codex-otel-support-design.md). Only the
+// 6 core-usage events are persisted; sse_event is filtered to
+// response.completed, everything else is counted as skipped or unknown.
+func (d *Dispatcher) dispatchCodexEvent(name string, rec *lpb.LogRecord, resourceAttrs []*commonpb.KeyValue) error {
+	switch name {
+	case "codex.conversation_starts":
+		r, err := parseCodexConversationStarts(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	case "codex.api_request":
+		r, err := parseCodexApiRequest(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	case "codex.sse_event":
+		if lookupAttr(rec.Attributes, "event.kind") != "response.completed" {
+			return errSkippedEvent // high-volume stream events carry no usage data
+		}
+		r, err := parseCodexTokenUsage(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	case "codex.user_prompt":
+		r, err := parseCodexUserPrompt(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	case "codex.tool_decision":
+		r, err := parseCodexToolDecision(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	case "codex.tool_result":
+		r, err := parseCodexToolResult(rec, resourceAttrs)
+		if err != nil {
+			return err
+		}
+		return d.sink.AppendEvent(r)
+	}
+	return errUnknownEvent // other codex.* events are out of scope for v1
 }
 
 func lookupAttr(attrs []*commonpb.KeyValue, key string) string {

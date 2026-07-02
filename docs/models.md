@@ -1,9 +1,9 @@
 # DuckDB 数据模型
 
-每个 Claude Code 指标 / 事件单独建一张窄表，共 **19 张表**：
+每个指标 / 事件单独建一张窄表，共 **25 张表**：
 
-- 8 张 metric 表（前缀 `metric_`）
-- 11 张 event 表（前缀 `event_`）
+- Claude Code：8 张 metric 表（前缀 `metric_`）+ 11 张 event 表（前缀 `event_`）
+- Codex CLI：6 张 event 表（前缀 `codex_event_`），见 §7
 
 设计原则：
 1. **一指标 / 一事件 = 一张表**，避免大宽表 schema 漂移
@@ -618,3 +618,46 @@ DuckDB 单文件长期增长后查询性能下降。建议：
 1. `internal/store/migrations/` 增加 `NNN_add_<table>.sql`
 2. 启动时按版本号顺序执行迁移
 3. 接收端 dispatcher 增加对应路由
+
+---
+
+## 7. Codex 事件表（6 张）
+
+来自 OpenAI Codex CLI 的 OTEL Logs（协议见 [`protocol.md`](./protocol.md) §7），DDL 在 `internal/store/migrations/003_codex_event_tables.sql`。
+
+### 7.1 公共列（codex 表族）
+
+| 列 | 类型 | NULL | 来源 |
+|---|---|---|---|
+| `ts` | TIMESTAMP | NOT NULL | `time_unix_nano` → `observed_time_unix_nano` → `event.timestamp` 三级回退（Codex 不设置 time_unix_nano） |
+| `received_at` | TIMESTAMP | NOT NULL DEFAULT now() | 入库时刻 |
+| `conversation_id` | VARCHAR | NULL | `conversation.id` |
+| `app_version` | VARCHAR | NULL | `app.version` |
+| `auth_mode` | VARCHAR | NULL | `ApiKey` / `Chatgpt` |
+| `originator` | VARCHAR | NULL | `codex_cli_rs` / `codex_exec` / `codex_vscode` 等 |
+| `terminal_type` | VARCHAR | NULL | `terminal.type` |
+| `model` | VARCHAR | NULL | `model` |
+| `slug` | VARCHAR | NULL | `slug` |
+| `user_account_id` | VARCHAR | NULL | `user.account_id` |
+| `user_email` | VARCHAR | NULL | `user.email` |
+| `attrs` | VARCHAR | NULL | 未识别 attribute 兜底（JSON 文本） |
+
+**与 Claude 表族的关键差异**：无 `user_id NOT NULL` 约束（Codex 身份字段天然可空），统一身份在查询层做 `COALESCE(user_account_id, user_email, 'unknown')`。
+
+### 7.2 各表特有列
+
+| 表 | 特有列 |
+|---|---|
+| `codex_event_conversation_starts` | `provider_name`、`reasoning_effort`、`reasoning_summary`、`context_window` BIGINT、`auto_compact_token_limit` BIGINT、`approval_policy`、`sandbox_policy`、`mcp_servers` |
+| `codex_event_api_request` | `duration_ms` BIGINT、`status_code` INTEGER、`error`、`attempt` BIGINT、`endpoint` |
+| `codex_event_token_usage` | `input_token_count` / `output_token_count` / `cached_token_count` / `reasoning_token_count` / `tool_token_count` BIGINT、`service_tier`、`model_reasoning_effort`、`duration_ms` BIGINT |
+| `codex_event_user_prompt` | `prompt_length` INTEGER、`prompt`（默认 `[REDACTED]`） |
+| `codex_event_tool_decision` | `tool_name`、`call_id`、`decision`（Codex 原始枚举）、`source` |
+| `codex_event_tool_result` | `tool_name`、`call_id`、`duration_ms` BIGINT、`success` BOOLEAN、`mcp_server`、`mcp_server_origin`、`arguments_length` / `output_length` BIGINT |
+
+### 7.3 写入要点
+
+- `codex.sse_event` 仅 `event.kind = response.completed` 写入 `codex_event_token_usage`，其余 kind 由 dispatcher 计入 skipped，不持久化
+- `codex_event_tool_result` 的 `arguments` / `output` 原文在解析层即丢弃（只算字节长度），**不落任何列也不落 `attrs`**——Codex 默认不脱敏且无客户端开关，这是接收端的隐私红线
+- token 统计口径为子集式（`cached ⊂ input`、`reasoning ⊂ output`），与 Claude 并列式不同：Codex 总量 = `input_token_count + output_token_count`，不可再加 cached
+- Codex 无成本数据，`metric_cost_usage` 等 Claude 表不受影响，两族表互不交叉
