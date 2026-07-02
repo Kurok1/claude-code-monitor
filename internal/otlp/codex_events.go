@@ -18,12 +18,31 @@ import (
 func preparseCodexEvent(rec *lpb.LogRecord, resourceAttrs []*commonpb.KeyValue) (attrMap, CodexCommonAttrs) {
 	m := newAttrMap(resourceAttrs, rec.Attributes)
 	delete(m, "event.name")
-	ts := time.Unix(0, int64(rec.TimeUnixNano)).UTC()
+	ts := codexEventTime(rec, m)
 	return m, extractCodexCommonAttrs(m, ts)
 }
 
+// codexEventTime resolves the event time. Codex (0.142.x) leaves the
+// LogRecord's time_unix_nano at 0, so fall back to observed_time_unix_nano,
+// then to the RFC3339 event.timestamp attribute. The attribute is consumed
+// unconditionally so it never pollutes the attrs leftover.
+func codexEventTime(rec *lpb.LogRecord, m attrMap) time.Time {
+	evTs := m.takeString("event.timestamp")
+	if rec.TimeUnixNano != 0 {
+		return time.Unix(0, int64(rec.TimeUnixNano)).UTC()
+	}
+	if rec.ObservedTimeUnixNano != 0 {
+		return time.Unix(0, int64(rec.ObservedTimeUnixNano)).UTC()
+	}
+	if evTs.Valid {
+		if t, err := time.Parse(time.RFC3339Nano, evTs.String); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Now().UTC() // last resort: receive time ≈ event time for a live stream
+}
+
 func extractCodexCommonAttrs(m attrMap, ts time.Time) CodexCommonAttrs {
-	m.take("event.timestamp") // RFC3339 duplicate of time_unix_nano, dropped
 	return CodexCommonAttrs{
 		Timestamp:      ts,
 		ConversationID: m.takeString("conversation.id"),

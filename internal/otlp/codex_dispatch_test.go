@@ -65,6 +65,26 @@ func TestCodexDispatchCaptured(t *testing.T) {
 	t.Logf("codex rows: %v skipped: %v", summary.EventRows, summary.Skipped)
 }
 
+// TestParseCodexApiRequestRow verifies field extraction and, critically, that
+// the event time is resolved even though codex leaves time_unix_nano at 0
+// (falls back to observed_time_unix_nano / event.timestamp).
+func TestParseCodexApiRequestRow(t *testing.T) {
+	row, ok := findFirstEventRow[CodexEventApiRequestRow](t, "codex.api_request")
+	if !ok {
+		t.Skip("no codex api_request rows in captured data")
+	}
+	if row.Timestamp.Year() < 2020 {
+		t.Errorf("Timestamp not resolved, got %s (time_unix_nano fallback missing?)", row.Timestamp)
+	}
+	if !row.Endpoint.Valid {
+		t.Errorf("Endpoint should be set: %+v", row)
+	}
+	if !row.ConversationID.Valid {
+		t.Errorf("ConversationID should be set: %+v", row)
+	}
+	t.Logf("codex api_request: ts=%s endpoint=%s attempt=%v", row.Timestamp, row.Endpoint.String, row.Attempt)
+}
+
 // TestParseCodexTokenUsageRow verifies token counts from response.completed.
 func TestParseCodexTokenUsageRow(t *testing.T) {
 	row, ok := findFirstEventRow[CodexEventTokenUsageRow](t, "codex.sse_event")
