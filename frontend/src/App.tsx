@@ -356,10 +356,10 @@ export default function App() {
             sparkValues={data.tokens.sparkline}
             animate
           />
-          {client !== 'codex' && (
+          {(client !== 'codex' || data.cost.cost_estimated) && (
             <KpiCard
               icon="dollar"
-              label={`${rangePrefix}消费金额`}
+              label={`${rangePrefix}消费金额${data.cost.cost_estimated ? '(含估算)' : ''}`}
               value={data.cost.total}
               unit="USD"
               delta={costDelta}
@@ -582,7 +582,7 @@ export default function App() {
                 <th className="num">输入 Tokens</th>
                 <th className="num">输出 Tokens</th>
                 <th className="num">缓存读取</th>
-                {client !== 'codex' && <th className="num">费用</th>}
+                {(client !== 'codex' || data.cost.cost_estimated) && <th className="num">费用</th>}
                 <th className="num" style={{ minWidth: 140 }}>
                   占比
                 </th>
@@ -604,7 +604,7 @@ export default function App() {
                   <td className="num">{formatTokens(m.tokens_in)}</td>
                   <td className="num">{formatTokens(m.tokens_out)}</td>
                   <td className="num">{formatTokens(m.cache_tokens)}</td>
-                  {client !== 'codex' && (
+                  {(client !== 'codex' || data.cost.cost_estimated) && (
                     <td className="num">
                       <strong>{formatCurrency(m.cost)}</strong>
                     </td>

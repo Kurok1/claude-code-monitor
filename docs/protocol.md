@@ -407,4 +407,4 @@ OpenAI 计数是**子集式**：`cached ⊂ input`、`reasoning ⊂ output`；An
 - Claude 总量 = `input + output + cacheRead + cacheCreation`
 - Codex 总量 = `input_token_count + output_token_count`（**不可再加 cached，否则重复计算**）
 
-Codex **不上报成本（cost_usd）**，也没有 lines_of_code / commit / PR 类指标。
+Codex **不上报成本（cost_usd）**，也没有 lines_of_code / commit / PR 类指标。自 v2.4.0 起，本项目可选地在 ingest 时按 LiteLLM 计价表**估算** Codex 的 `cost_usd` 并落入 `codex_event_token_usage.cost_usd`（由 `pricing.enabled` 门控，默认关闭；详见 `docs/models.md` 与 `config.example.yaml` 的 `pricing` 段）。此为估算值，与 Claude 客户端自报的权威成本语义不同。

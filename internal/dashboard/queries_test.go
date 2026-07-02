@@ -450,3 +450,105 @@ func TestMergeModelGroups_FoldsClaudeVariants(t *testing.T) {
 		t.Errorf("group[2] = %+v", got[2])
 	}
 }
+
+func insertCodexCostRow(t *testing.T, db *sql.DB, ts time.Time, model string, cost sql.NullFloat64) {
+	t.Helper()
+	_, err := db.Exec(`
+		INSERT INTO codex_event_token_usage
+		  (ts, conversation_id, model, input_token_count, output_token_count, cost_usd)
+		VALUES (?, 'conv-1', ?, 100, 100, ?)
+	`, ts, model, cost)
+	if err != nil {
+		t.Fatalf("insert codex cost row: %v", err)
+	}
+}
+
+func TestQueryPeriodCostIncludesCodex(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	ts := w.TodayStartUTC.Add(time.Hour)
+	insertCostUsage(t, db, ts, "claude-opus-4-1", 1.50)                                   // claude authoritative
+	insertCodexCostRow(t, db, ts, "gpt-5.5", sql.NullFloat64{Float64: 0.25, Valid: true}) // codex estimated
+	insertCodexCostRow(t, db, ts, "gpt-5.5", sql.NullFloat64{})                           // NULL → ignored
+
+	start, end := w.TodayStartUTC, w.TodayEndUTC
+	claudeOnly, _ := QueryPeriodCost(ctx, db, ClientClaude, start, end)
+	codexOnly, _ := QueryPeriodCost(ctx, db, ClientCodex, start, end)
+	all, _ := QueryPeriodCost(ctx, db, ClientAll, start, end)
+	if claudeOnly != 1.50 {
+		t.Fatalf("claude cost = %v, want 1.50", claudeOnly)
+	}
+	if codexOnly != 0.25 {
+		t.Fatalf("codex cost = %v, want 0.25 (NULL row ignored)", codexOnly)
+	}
+	if all != 1.75 {
+		t.Fatalf("all cost = %v, want 1.75", all)
+	}
+}
+
+func TestSnapshotCostEstimatedFlag(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	c, _ := NewClassifier(nil)
+
+	claude, err := BuildSnapshot(ctx, db, c, w, "day", ClientClaude, true)
+	if err != nil {
+		t.Fatalf("claude snapshot: %v", err)
+	}
+	if claude.Cost.Estimated {
+		t.Fatal("claude view must not be flagged estimated")
+	}
+	codexOn, _ := BuildSnapshot(ctx, db, c, w, "day", ClientCodex, true)
+	if !codexOn.Cost.Estimated {
+		t.Fatal("codex view with pricing enabled must be estimated")
+	}
+	codexOff, _ := BuildSnapshot(ctx, db, c, w, "day", ClientCodex, false)
+	if codexOff.Cost.Estimated {
+		t.Fatal("codex view with pricing disabled must not be estimated")
+	}
+}
+
+func TestHeatmapCodexWeightGating(t *testing.T) {
+	db, w, _ := testDB(t)
+	ctx := context.Background()
+	weights := HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}
+	// Both signatures must run; disabled=2-weight is asserted numerically in
+	// TestBuildHeatmap_CodexWeightDenominator.
+	if _, err := BuildHeatmap(ctx, db, w, weights, ClientCodex, false); err != nil {
+		t.Fatalf("disabled: %v", err)
+	}
+	if _, err := BuildHeatmap(ctx, db, w, weights, ClientCodex, true); err != nil {
+		t.Fatalf("enabled: %v", err)
+	}
+}
+
+func TestSessionDetailCost(t *testing.T) {
+	db, _, now := testDB(t)
+	ctx := context.Background()
+
+	// claude session: authoritative cost + some activity so it's found.
+	if _, err := db.Exec(`INSERT INTO metric_cost_usage (ts, start_ts, value, user_id, session_id, model) VALUES (?, ?, 2.0, 'u', 'sess-claude', 'claude-opus-4-1')`, now, now); err != nil {
+		t.Fatalf("seed claude cost: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO event_api_request (ts, user_id, session_id, model) VALUES (?, 'u', 'sess-claude', 'claude-opus-4-1')`, now); err != nil {
+		t.Fatalf("seed claude activity: %v", err)
+	}
+	resp, found, err := BuildSessionDetail(ctx, db, "sess-claude", ClientClaude, 5, 5, true)
+	if err != nil || !found {
+		t.Fatalf("claude detail: found=%v err=%v", found, err)
+	}
+	if resp.Cost == nil || *resp.Cost != 2.0 || resp.CostEstimated {
+		t.Fatalf("claude cost should be authoritative 2.0, got %+v estimated=%v", resp.Cost, resp.CostEstimated)
+	}
+
+	// codex session: estimated cost, gated on pricingEnabled.
+	insertCodexCostRow(t, db, now, "gpt-5.5", sql.NullFloat64{Float64: 0.5, Valid: true}) // conversation_id = conv-1
+	on, found, _ := BuildSessionDetail(ctx, db, "conv-1", ClientCodex, 5, 5, true)
+	if !found || on.Cost == nil || *on.Cost != 0.5 || !on.CostEstimated {
+		t.Fatalf("codex enabled cost wrong: cost=%v estimated=%v found=%v", on.Cost, on.CostEstimated, found)
+	}
+	off, _, _ := BuildSessionDetail(ctx, db, "conv-1", ClientCodex, 5, 5, false)
+	if off.Cost != nil {
+		t.Fatalf("codex disabled cost must be nil, got %v", *off.Cost)
+	}
+}

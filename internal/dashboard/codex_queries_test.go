@@ -252,7 +252,7 @@ func TestBuildHeatmap_CodexWeightDenominator(t *testing.T) {
 	insertCodexTokenUsage(t, db, ts, "conv-h", "gpt-5.5", 100, 50, 0, 0)
 
 	weights := HeatmapWeights{Tokens: 0.4, Cost: 0.4, Requests: 0.2}
-	resp, err := BuildHeatmap(context.Background(), db, w, weights, ClientCodex)
+	resp, err := BuildHeatmap(context.Background(), db, w, weights, ClientCodex, false)
 	if err != nil {
 		t.Fatalf("BuildHeatmap: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestSessionDetail_Codex(t *testing.T) {
 	insertCodexToolResult(t, db, ts.Add(2*time.Minute), "conv-d", "exec_command")
 	insertCodexToolResult(t, db, ts.Add(3*time.Minute), "conv-d", "web_search")
 
-	resp, found, err := BuildSessionDetail(context.Background(), db, "conv-d", ClientCodex, 10, 10)
+	resp, found, err := BuildSessionDetail(context.Background(), db, "conv-d", ClientCodex, 10, 10, false)
 	if err != nil || !found {
 		t.Fatalf("BuildSessionDetail: found=%v err=%v", found, err)
 	}
@@ -334,7 +334,7 @@ func TestSessionDetail_Codex(t *testing.T) {
 	}
 
 	// 无 hint(ClientAll)时按 claude → codex 顺序探测,也应命中
-	_, found, err = BuildSessionDetail(context.Background(), db, "conv-d", ClientAll, 10, 10)
+	_, found, err = BuildSessionDetail(context.Background(), db, "conv-d", ClientAll, 10, 10, false)
 	if err != nil || !found {
 		t.Errorf("probe with ClientAll: found=%v err=%v", found, err)
 	}

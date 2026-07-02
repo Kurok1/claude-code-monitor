@@ -10,6 +10,8 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	lpb "go.opentelemetry.io/proto/otlp/logs/v1"
 	mpb "go.opentelemetry.io/proto/otlp/metrics/v1"
+
+	"github.com/kuroky/claude-code-monitor/internal/pricing"
 )
 
 // DispatchSummary is what the dispatcher returns from each Dispatch call.
@@ -23,12 +25,28 @@ type DispatchSummary struct {
 }
 
 type Dispatcher struct {
-	log  *slog.Logger
-	sink Sink
+	log     *slog.Logger
+	sink    Sink
+	pricing *pricing.Engine
 }
 
-func NewDispatcher(log *slog.Logger, sink Sink) *Dispatcher {
-	return &Dispatcher{log: log, sink: sink}
+func NewDispatcher(log *slog.Logger, sink Sink, engine *pricing.Engine) *Dispatcher {
+	return &Dispatcher{log: log, sink: sink, pricing: engine}
+}
+
+// enrichCodexCost fills r.CostUsd from the pricing engine. No-op when engine is
+// nil (pricing not wired) — CostFor itself no-ops when pricing is disabled.
+func enrichCodexCost(r *CodexEventTokenUsageRow, engine *pricing.Engine) {
+	if engine == nil {
+		return
+	}
+	r.CostUsd = engine.CostFor(r.Model.String, pricing.TokenCounts{
+		Input:     r.InputTokenCount.Int64,
+		Output:    r.OutputTokenCount.Int64,
+		Cached:    r.CachedTokenCount.Int64,
+		Reasoning: r.ReasoningTokenCount.Int64,
+		Tool:      r.ToolTokenCount.Int64,
+	})
 }
 
 var (
@@ -273,6 +291,7 @@ func (d *Dispatcher) dispatchCodexEvent(name string, rec *lpb.LogRecord, resourc
 		if err != nil {
 			return err
 		}
+		enrichCodexCost(&r, d.pricing)
 		return d.sink.AppendEvent(r)
 	case "codex.user_prompt":
 		r, err := parseCodexUserPrompt(rec, resourceAttrs)

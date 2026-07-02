@@ -114,7 +114,7 @@ metrics_exporter = "none"   # 不配置的话 metrics 默认发往 OpenAI 自己
 # log_user_prompt = true    # 可选：上报 prompt 原文（默认 "[REDACTED]"）
 ```
 
-Codex 事件落入 6 张 `codex_event_*` 表（会话 / API 请求 / token 用量 / prompt / 工具决策与结果），详见 `docs/protocol.md` §7 与 `docs/models.md` §7。注意：Codex 不上报成本（cost_usd），token 计数是子集式口径（cached ⊂ input、reasoning ⊂ output）。
+Codex 事件落入 6 张 `codex_event_*` 表（会话 / API 请求 / token 用量 / prompt / 工具决策与结果），详见 `docs/protocol.md` §7 与 `docs/models.md` §7。注意：Codex 不上报成本（cost_usd），token 计数是子集式口径（cached ⊂ input、reasoning ⊂ output）。自 v2.4.0 起可选启用 `pricing`（默认关闭）按 LiteLLM 计价表在 ingest 时**估算** Codex 成本，落入 `codex_event_token_usage.cost_usd`——配置见 `config.example.yaml` 的 `pricing` 段。
 
 ### 4. 查询
 
@@ -246,7 +246,7 @@ GET /internal/stats                         per-table buffer 计数
 GET /debug/pprof/*                          运行时 profile（enable_pprof: true 时）
 ```
 
-usage / sessions 端点均支持 `client=all|claude|codex`（缺省 `all`）按客户端过滤；rankings 维持 Claude-only（两家工具命名空间不同）。Codex 的 token 统计口径为子集式，合并总量 = input + output（不重复计 cached/reasoning），成本恒为 Claude 数据。
+usage / sessions 端点均支持 `client=all|claude|codex`（缺省 `all`）按客户端过滤；rankings 维持 Claude-only（两家工具命名空间不同）。Codex 的 token 统计口径为子集式，合并总量 = input + output（不重复计 cached/reasoning）。成本：Claude 为客户端自报的权威值；Codex 为可选估算值（启用 `pricing` 后），响应用 `cost_estimated` 标记，前端在 codex/all 视图标注「含估算」。
 
 查询 API 设计与每个端点的 SQL 见 [`docs/plan-v2-query-api.md`](docs/plan-v2-query-api.md)。响应统一带 `Cache-Control: private, max-age=30`，所有时间窗按 `dashboard.timezone`（默认 `Asia/Shanghai`）切分。
 

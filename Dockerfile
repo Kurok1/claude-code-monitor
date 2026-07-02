@@ -36,6 +36,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
+# Bundle the LiteLLM price table into the image (fetched at build time, NOT
+# vendored in the repo). config.docker.yaml's pricing.source_file points here.
+# curl ships in the golang buildpack-deps base. Fail the build if unreachable.
+ARG LITELLM_PRICING_URL=https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+RUN mkdir -p /out/pricing \
+    && curl -fsSL --retry 5 --retry-delay 2 -o /out/pricing/litellm.json "${LITELLM_PRICING_URL}"
+
 # ---------- Stage 3: minimal runtime ----------
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -47,6 +54,9 @@ COPY --from=go-builder /out/server /usr/local/bin/server
 COPY config.docker.yaml /etc/claude-code-monitor/config.yaml
 # Reference copy of the upstream example for users mounting their own config
 COPY config.example.yaml /etc/claude-code-monitor/config.example.yaml
+# Bundled LiteLLM price table (fetched during build). Enable via the `pricing`
+# block in config; source_file already points at this path in config.docker.yaml.
+COPY --from=go-builder /out/pricing/litellm.json /etc/claude-code-monitor/pricing/litellm.json
 
 # Persist DuckDB files (and capture dir, if enabled) outside the container
 VOLUME ["/data"]

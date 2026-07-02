@@ -16,6 +16,7 @@ type Config struct {
 	Capture   CaptureConfig   `yaml:"capture"`
 	Stats     StatsConfig     `yaml:"stats"`
 	Dashboard DashboardConfig `yaml:"dashboard"`
+	Pricing   PricingConfig   `yaml:"pricing"`
 	Logging   LoggingConfig   `yaml:"logging"`
 }
 
@@ -80,6 +81,28 @@ type HeatmapConfig struct {
 type ModelGroupRule struct {
 	Pattern string `yaml:"pattern"`
 	Group   string `yaml:"group"`
+}
+
+// PricingConfig configures the third-party cost-estimation engine (internal/pricing).
+// Disabled by default: when Enabled is false the engine is a no-op and codex
+// cost_usd stays NULL. SourceFile is the required local baseline (LiteLLM-format
+// JSON — NOT vendored in this repo); SourceURL optionally refreshes it in the
+// background; Overrides are per-model hand rates layered on top (file < url < overrides).
+type PricingConfig struct {
+	Enabled         bool                     `yaml:"enabled"`
+	SourceFile      string                   `yaml:"source_file"`
+	SourceURL       string                   `yaml:"source_url"`
+	RefreshInterval Duration                 `yaml:"refresh_interval"`
+	Overrides       map[string]PriceOverride `yaml:"overrides"`
+}
+
+// PriceOverride mirrors the LiteLLM per-model price fields we consume. Pointers
+// distinguish "absent" from "explicitly 0" (a genuinely free cache read).
+type PriceOverride struct {
+	InputCostPerToken           *float64 `yaml:"input_cost_per_token"`
+	OutputCostPerToken          *float64 `yaml:"output_cost_per_token"`
+	CacheReadInputTokenCost     *float64 `yaml:"cache_read_input_token_cost"`
+	OutputCostPerReasoningToken *float64 `yaml:"output_cost_per_reasoning_token"`
 }
 
 type LoggingConfig struct {
@@ -160,6 +183,9 @@ func applyDefaults(cfg *Config) {
 	if h.WTokens == 0 && h.WCost == 0 && h.WRequests == 0 {
 		h.WTokens, h.WCost, h.WRequests = 0.4, 0.4, 0.2
 	}
+	if cfg.Pricing.RefreshInterval == 0 {
+		cfg.Pricing.RefreshInterval = Duration(24 * time.Hour)
+	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
 	}
@@ -220,6 +246,26 @@ func validate(cfg *Config) error {
 		}
 		if _, err := regexp.Compile(rule.Pattern); err != nil {
 			return fmt.Errorf("dashboard.model_groups[%d].pattern %q: %w", i, rule.Pattern, err)
+		}
+	}
+	if cfg.Pricing.Enabled {
+		if cfg.Pricing.SourceFile == "" {
+			return fmt.Errorf("pricing.source_file is required when pricing.enabled")
+		}
+		if cfg.Pricing.RefreshInterval <= 0 {
+			return fmt.Errorf("pricing.refresh_interval must be > 0")
+		}
+		for name, o := range cfg.Pricing.Overrides {
+			for field, p := range map[string]*float64{
+				"input_cost_per_token":            o.InputCostPerToken,
+				"output_cost_per_token":           o.OutputCostPerToken,
+				"cache_read_input_token_cost":     o.CacheReadInputTokenCost,
+				"output_cost_per_reasoning_token": o.OutputCostPerReasoningToken,
+			} {
+				if p != nil && *p < 0 {
+					return fmt.Errorf("pricing.overrides[%q].%s must be >= 0", name, field)
+				}
+			}
 		}
 	}
 	return nil

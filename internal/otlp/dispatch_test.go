@@ -50,7 +50,7 @@ func TestDispatchAllCaptured(t *testing.T) {
 	}
 
 	sink := &NoopSink{}
-	d := NewDispatcher(quietLogger(), sink)
+	d := NewDispatcher(quietLogger(), sink, nil)
 
 	metricRows := map[string]int{}
 	eventRows := map[string]int{}
@@ -169,7 +169,7 @@ func findFirstMetricRow[T any](t *testing.T, metricName string) (T, bool) {
 		return zero, false
 	}
 	sink := &NoopSink{}
-	d := NewDispatcher(quietLogger(), sink)
+	d := NewDispatcher(quietLogger(), sink, nil)
 	for _, f := range files {
 		data, _ := os.ReadFile(f)
 		var req metricspb.ExportMetricsServiceRequest
@@ -195,7 +195,7 @@ func findFirstEventRow[T any](t *testing.T, eventName string) (T, bool) {
 		return zero, false
 	}
 	sink := &NoopSink{}
-	d := NewDispatcher(quietLogger(), sink)
+	d := NewDispatcher(quietLogger(), sink, nil)
 	for _, f := range files {
 		data, _ := os.ReadFile(f)
 		var req logspb.ExportLogsServiceRequest

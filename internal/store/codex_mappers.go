@@ -94,6 +94,7 @@ func mapCodexTokenUsage(row any) ([]driver.Value, error) {
 		nullStr(r.ModelReasoningEffort),
 		nullInt64(r.DurationMs),
 		attrs,
+		nullFloat64(r.CostUsd),
 	), nil
 }
 

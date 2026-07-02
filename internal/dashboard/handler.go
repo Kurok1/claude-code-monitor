@@ -16,16 +16,18 @@ import (
 // Handler exposes /api/usage/{snapshot,trends,rankings,heatmap}.
 // All endpoints serve JSON and short-cache via `Cache-Control: private, max-age=30`.
 type Handler struct {
-	db         *sql.DB
-	cfg        config.DashboardConfig
-	classifier *Classifier
-	log        *slog.Logger
+	db             *sql.DB
+	cfg            config.DashboardConfig
+	classifier     *Classifier
+	pricingEnabled bool
+	log            *slog.Logger
 }
 
 // NewHandler compiles the model-group classifier from cfg. The patterns
 // were already validated at config.Load, so an error here implies an
-// internal mismatch between validation and compilation paths.
-func NewHandler(db *sql.DB, cfg config.DashboardConfig, log *slog.Logger) (*Handler, error) {
+// internal mismatch between validation and compilation paths. pricingEnabled
+// (from config.Pricing.Enabled) gates whether codex estimated cost is surfaced.
+func NewHandler(db *sql.DB, cfg config.DashboardConfig, pricingEnabled bool, log *slog.Logger) (*Handler, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -33,7 +35,7 @@ func NewHandler(db *sql.DB, cfg config.DashboardConfig, log *slog.Logger) (*Hand
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{db: db, cfg: cfg, classifier: c, log: log}, nil
+	return &Handler{db: db, cfg: cfg, classifier: c, pricingEnabled: pricingEnabled, log: log}, nil
 }
 
 // ServeHTTP routes by path. Only GET is allowed.
@@ -78,7 +80,7 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng, client)
+	resp, err := BuildSnapshot(r.Context(), h.db, h.classifier, tw, rng, client, h.pricingEnabled)
 	if err != nil {
 		if isUserError(err) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -166,7 +168,7 @@ func (h *Handler) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		Tokens:   h.cfg.Heatmap.WTokens,
 		Cost:     h.cfg.Heatmap.WCost,
 		Requests: h.cfg.Heatmap.WRequests,
-	}, client)
+	}, client, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("heatmap: build", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -184,7 +186,7 @@ func (h *Handler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp, err := BuildSessionList(r.Context(), h.db, client, limit)
+	resp, err := BuildSessionList(r.Context(), h.db, client, limit, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("sessions: list", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
@@ -205,7 +207,7 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills)
+	resp, found, err := BuildSessionDetail(r.Context(), h.db, id, client, h.cfg.TopN.Tools, h.cfg.TopN.Skills, h.pricingEnabled)
 	if err != nil {
 		h.log.Error("sessions: detail", "err", err, "session_id", id)
 		writeError(w, http.StatusInternalServerError, "internal error")

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/kuroky/claude-code-monitor/internal/config"
+	"github.com/kuroky/claude-code-monitor/internal/pricing"
 )
 
 type Server struct {
@@ -20,7 +21,7 @@ type Server struct {
 	capture  *Capturer
 }
 
-func NewServer(cfg config.Config, log *slog.Logger, sink Sink) (*Server, error) {
+func NewServer(cfg config.Config, log *slog.Logger, sink Sink, engine *pricing.Engine) (*Server, error) {
 	if sink == nil {
 		sink = &NoopSink{}
 	}
@@ -35,7 +36,7 @@ func NewServer(cfg config.Config, log *slog.Logger, sink Sink) (*Server, error) 
 		return nil, fmt.Errorf("listen %s: %w", cfg.Server.GRPCListen, err)
 	}
 
-	dispatcher := NewDispatcher(log, sink)
+	dispatcher := NewDispatcher(log, sink, engine)
 
 	gs := grpc.NewServer()
 	metricspb.RegisterMetricsServiceServer(gs, NewMetricsService(log, capture, dispatcher))

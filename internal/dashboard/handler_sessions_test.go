@@ -23,7 +23,7 @@ func newTestHandler(t *testing.T) (*Handler, func(table, sessionID string, ts ti
 		TopN:     config.TopNConfig{Tools: 10, Skills: 10},
 		Timezone: "Asia/Shanghai",
 	}
-	h, err := NewHandler(db, cfg, nil)
+	h, err := NewHandler(db, cfg, false, nil)
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}

@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { Sessions } from '../api/sessions';
 import type { SessionSummary } from '../api/sessions';
-import { formatTokens } from '../lib/format';
+import { formatTokens, formatCurrency } from '../lib/format';
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString('zh-CN', {
@@ -63,6 +63,7 @@ export function SessionsView({ client, onOpen }: Props) {
                 <th className="num">Tokens</th>
                 <th className="num">工具</th>
                 <th className="num">Skill</th>
+                <th className="num">费用</th>
                 <th className="num">最近活动</th>
               </tr>
             </thead>
@@ -83,6 +84,10 @@ export function SessionsView({ client, onOpen }: Props) {
                   <td className="num">{formatTokens(s.tokens)}</td>
                   <td className="num">{s.tool_calls.toLocaleString()}</td>
                   <td className="num">{s.skill_activations.toLocaleString()}</td>
+                  <td className="num">
+                    {s.cost != null ? formatCurrency(s.cost) : '—'}
+                    {s.cost_estimated && s.cost != null && <span className="est-tag"> 估</span>}
+                  </td>
                   <td className="num">{fmtTime(s.last_active)}</td>
                 </tr>
               ))}

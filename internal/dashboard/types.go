@@ -30,6 +30,7 @@ type CostBlock struct {
 	Total     float64   `json:"total"`
 	PrevTotal float64   `json:"prev_total"`
 	Sparkline []float64 `json:"sparkline"`
+	Estimated bool      `json:"cost_estimated"` // true when the shown cost includes codex estimates
 }
 
 // RequestsBlock counts API requests (rows in event_api_request) in the
@@ -151,6 +152,10 @@ type SessionSummary struct {
 	Requests         int64  `json:"requests"`
 	ToolCalls        int64  `json:"tool_calls"`
 	SkillActivations int64  `json:"skill_activations"`
+	// Cost is claude authoritative or codex estimated; nil when a codex row has
+	// no estimate (pricing disabled). CostEstimated marks codex-estimated rows.
+	Cost          *float64 `json:"cost,omitempty"`
+	CostEstimated bool     `json:"cost_estimated"`
 }
 
 // SessionListResponse → GET /api/sessions?limit=
@@ -175,6 +180,10 @@ type SessionDetailResponse struct {
 	SkillActivations int64       `json:"skill_activations"`
 	Tools            []ToolRank  `json:"tools"`
 	Skills           []SkillRank `json:"skills"`
+	// Cost is claude authoritative or codex estimated; nil when a codex session
+	// has no estimate (pricing disabled). CostEstimated marks codex estimates.
+	Cost          *float64 `json:"cost,omitempty"`
+	CostEstimated bool     `json:"cost_estimated"`
 	// TokenDetail is codex-only: the four raw token dimensions
 	// (subset semantics: cached ⊂ input, reasoning ⊂ output). Nil for
 	// claude sessions.

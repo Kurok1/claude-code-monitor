@@ -253,3 +253,4 @@ for _, row := range rows {
 | Codex 用平行 `codex_event_*` 表，不归一进 Claude 表 | 两家协议独立演进互不干扰；统一用量视图放查询层（见 spec 2026-07-01） |
 | Codex `tool_result` 原文只存长度 | Codex 默认不脱敏且无客户端开关，敏感内容不落盘 |
 | Codex 仅接 Logs 的 6 个核心用量事件 | metrics 是 histogram（管线不支持）；sandbox / network_proxy 等事件 v1 无需求 |
+| Codex/第三方成本由 `internal/pricing` 在 ingest 时按 LiteLLM 计价表**估算** `cost_usd`（v2.4.0，反转早期「不估算」非目标）；Claude 仍用自报权威成本 | Codex 不上报 cost；用外部计价表估算填补，默认关闭零影响，单价写入时冻结不回填（见 spec/plan 2026-07-02-third-party-cost-estimation） |
