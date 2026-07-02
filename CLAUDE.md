@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-`claude-code-monitor` 是一个 Go 实现的 Claude Code 监控服务：
+`claude-code-monitor` 是一个 Go 实现的 AI 编码客户端监控服务：
 
-- **输入**：Claude Code 客户端通过 **OTLP gRPC** 推送的 Metrics 与 Events
-- **存储**：DuckDB 单文件，**一指标 / 一事件 = 一张表**，共 **19 张表**
+- **输入**：Claude Code（Metrics + Events）与 OpenAI Codex CLI（仅 Events）通过 **OTLP gRPC** 推送的遥测，共用 4317 端口
+- **存储**：DuckDB 单文件，**一指标 / 一事件 = 一张表**，共 **25 张表**（Claude 19 张 + Codex 6 张 `codex_event_*`）
 - **当前版本（v1）**：只做后端 ingest + 落库；查询 API 与前端放 v2
 
 ---
@@ -40,11 +40,12 @@ Claude Code (gRPC client, OTLP/protobuf)
               [Dispatcher]                     ← internal/otlp/dispatch.go
                     │
        按 metric.name / event.name 路由
+       （event.name 带 codex. 前缀 → dispatchCodexEvent）
                     │
         ┌───────────┴───────────┐
         ▼                       ▼
-  parseXxx()                parseYyy()         ← internal/otlp/{metrics,events}.go
-   → XxxRow                 → YyyRow            （19 个强类型 row struct）
+  parseXxx()                parseYyy()         ← internal/otlp/{metrics,events,codex_events}.go
+   → XxxRow                 → YyyRow            （25 个强类型 row struct）
         │                       │
         └───────────┬───────────┘
                     ▼
@@ -68,6 +69,9 @@ Claude Code (gRPC client, OTLP/protobuf)
 - 解析器输出的 row struct 字段顺序**必须**与 DDL 列顺序对齐，因为 Appender 是位置式 API
 - 公共属性（user.id / session.id / model 等）在 Resource 层和数据点层都可能出现，**数据点层覆盖 Resource 层**
 - 未识别的 metric / event → `unknown` 日志，不报错；未识别的 attribute → 落入 `attrs JSON` 列
+- Claude 表族 `user.id` 是硬性 NOT NULL 前提；**codex 表族无身份硬约束**（user_account_id / user_email 可空）
+- **Codex 隐私红线**：`codex.tool_result` 的 `arguments` / `output` 原文在解析层只算长度即丢弃，不落列也不落 attrs
+- Codex 时间戳三级回退：`time_unix_nano`（恒为 0）→ `observed_time_unix_nano` → `event.timestamp` attribute
 
 ---
 
@@ -246,3 +250,6 @@ for _, row := range rows {
 | `TIMESTAMP` 微秒精度而非 `TIMESTAMP_NS` | 兼容外部 BI 工具；详见 `docs/models.md` §5.1 |
 | 全局 mutex 串行 flush | DuckDB 单写者约束；监控吞吐远低于其极限，简单优先 |
 | 背压策略：丢最旧 + 日志，不反压客户端 | OTLP SDK 自身就会丢，监控不能阻塞客户端 |
+| Codex 用平行 `codex_event_*` 表，不归一进 Claude 表 | 两家协议独立演进互不干扰；统一用量视图放查询层（见 spec 2026-07-01） |
+| Codex `tool_result` 原文只存长度 | Codex 默认不脱敏且无客户端开关，敏感内容不落盘 |
+| Codex 仅接 Logs 的 6 个核心用量事件 | metrics 是 histogram（管线不支持）；sandbox / network_proxy 等事件 v1 无需求 |

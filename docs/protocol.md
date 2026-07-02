@@ -361,3 +361,50 @@ prompt 中的 `@`-mention 被解析时记录。
 ## 6. 兜底策略
 
 为应对 Claude Code 版本升级新增 attribute 的情况，每张表保留一个 `attrs JSON` 列，存储未被显式提取到列的所有 attribute。详见 [`models.md`](./models.md)。
+
+---
+
+## 7. Codex CLI 事件（v1 核心用量）
+
+自 v2.2 起同步接收 OpenAI Codex CLI 的 OTEL 遥测（调研与决策见 `docs/superpowers/specs/2026-07-01-codex-otel-support-design.md`，实测基线 codex-cli 0.142.5）。Codex 只用 OTEL **Logs** 信号（其 metrics 是 histogram/counter、traces 无需求，均不接收）。
+
+### 7.1 客户端配置
+
+Codex **不读取标准 OTEL 环境变量**，只认 `~/.codex/config.toml` 的 `[otel]` 段；Logs 导出默认关闭：
+
+```toml
+[otel]
+environment = "prod"
+exporter = { otlp-grpc = { endpoint = "http://127.0.0.1:4317" } }
+metrics_exporter = "none"   # 默认为 statsig（发往 OpenAI），建议显式关闭
+```
+
+### 7.2 Resource 与公共属性
+
+- Resource：`service.name` = originator（如 `codex_cli_rs` / `codex_exec` / `codex_vscode`）、`service.version`、`env`、`host.name`，均不提取（落 `attrs`）
+- 每条事件的公共 attribute：`conversation.id`、`app.version`、`auth_mode`（`ApiKey` / `Chatgpt`）、`originator`、`terminal.type`、`model`、`slug`、`user.account_id`（可空）、`user.email`（可空）
+- **没有 `user.id`**：codex 表族无身份硬约束，统一身份在查询层 `COALESCE(user_account_id, user_email, 'unknown')`
+- 事件名在 `event.name` attribute，**完整带 `codex.` 前缀**（实测确认）
+- **时间戳**：Codex 不设置 LogRecord 的 `time_unix_nano`（恒为 0，实测确认）。接收端按 `time_unix_nano` → `observed_time_unix_nano` → `event.timestamp` attribute（RFC3339）三级回退解析
+
+### 7.3 入库事件（6 个）
+
+| 事件 | 入库表 | 关键专有属性 |
+|---|---|---|
+| `codex.conversation_starts` | `codex_event_conversation_starts` | `provider_name`、`reasoning_effort`、`reasoning_summary`、`context_window`、`auto_compact_token_limit`、`approval_policy`、`sandbox_policy`、`mcp_servers`；`auth.env_*` 落 attrs |
+| `codex.api_request` | `codex_event_api_request` | `duration_ms`、`http.response.status_code`、`error.message`、`attempt`、`endpoint`；`auth.*` 落 attrs。注意是 **HTTP attempt 粒度**（含重试） |
+| `codex.sse_event` | `codex_event_token_usage` | **仅 `event.kind = response.completed` 落库**，其余 kind 计入 skipped 不持久化（量大且无用量数据）。字段：`input_token_count` / `output_token_count` / `cached_token_count`(可空) / `reasoning_token_count`(可空) / `tool_token_count`、`service_tier`、`model_reasoning_effort`、`duration_ms` |
+| `codex.user_prompt` | `codex_event_user_prompt` | `prompt_length`、`prompt`（默认 `"[REDACTED]"`，需客户端 `log_user_prompt = true`） |
+| `codex.tool_decision` | `codex_event_tool_decision` | `tool_name`、`call_id`、`decision`（原始枚举：`approved` / `approved_for_session` / `denied` / `abort` / `timed_out` 等）、`source`（`AutomatedReviewer` / `Config` / `User`） |
+| `codex.tool_result` | `codex_event_tool_result` | `tool_name`、`call_id`、`duration_ms`、`success`、`mcp_server`、`mcp_server_origin`；**`arguments` / `output` 原文只算长度即丢弃**（隐私红线：Codex 默认不脱敏且无客户端开关），落列 `arguments_length` / `output_length` |
+
+范围外（识别但不落库，计入 Unknown）：`codex.startup_phase`、`codex.websocket_connect` / `websocket_request`、`codex.auth_recovery`、`codex.turn_ttft`、`codex.sandbox_outcome`、`codex.network_proxy.policy_decision`、`codex.plugin_install_*`。
+
+### 7.4 token 口径（与 Claude Code 的关键差异）
+
+OpenAI 计数是**子集式**：`cached ⊂ input`、`reasoning ⊂ output`；Anthropic 是**并列式**（cacheRead / cacheCreation 独立于 input）。统一总量公式：
+
+- Claude 总量 = `input + output + cacheRead + cacheCreation`
+- Codex 总量 = `input_token_count + output_token_count`（**不可再加 cached，否则重复计算**）
+
+Codex **不上报成本（cost_usd）**，也没有 lines_of_code / commit / PR 类指标。
