@@ -39,12 +39,12 @@ jobs:
             goarch: arm64
             ext: ""
             archive: tar.gz
-          - target: windows-amd64
-            os: windows-latest
-            goos: windows
-            goarch: amd64
-            ext: ".exe"
-            archive: zip
+          # windows-amd64 was dropped (v2.2.0): the GitHub runner's mingw
+          # toolchain (gcc >= 13) removed the std::call_once emutls symbols
+          # that duckdb-go-bindings' prebuilt static libs still reference,
+          # so the cgo link fails and upstream has not rebuilt the libs.
+          # Windows users should run the multi-arch Docker image instead:
+          # ghcr.io/kurok1/claude-code-monitor (built by the jobs below).
 
     steps:
       - uses: actions/checkout@v4
@@ -73,18 +73,7 @@ jobs:
           # page — fail fast instead.
           test -f ../internal/web/dist/index.html
 
-      - name: Configure MinGW (windows)
-        if: matrix.goos == 'windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          # duckdb-go-bindings ships UCRT-built static libs; MSVCRT toolchain
-          # (MINGW64) fails to link with undefined __stdio_common_* refs.
-          msystem: UCRT64
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf zip
-          path-type: inherit
-
-      - name: Build (unix)
-        if: matrix.goos != 'windows'
+      - name: Build
         env:
           CGO_ENABLED: '1'
           GOOS: ${{ matrix.goos }}
@@ -99,31 +88,12 @@ jobs:
           tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
           ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
 
-      - name: Build (windows)
-        if: matrix.goos == 'windows'
-        shell: msys2 {0}
-        env:
-          CGO_ENABLED: '1'
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          NAME="claude-code-monitor_${VERSION}_${{ matrix.target }}"
-          go build -trimpath -ldflags "-s -w" -o "dist/${NAME}/claude-code-monitor${{ matrix.ext }}" ./cmd/server
-          cp config.example.yaml "dist/${NAME}/"
-          ( cd dist && /usr/bin/zip -r "${NAME}.zip" "${NAME}" )
-          ( cd dist && sha256sum "${NAME}.zip" > "${NAME}.zip.sha256" )
-
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
-            dist/*.zip
-            dist/*.zip.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -141,7 +111,7 @@ jobs:
           # step also pulls the docker-digests-* artifacts (0-byte hex-named
           # files used by the docker-manifest job) and their unzip fails the
           # whole release step.
-          pattern: '{linux,darwin,windows}-*'
+          pattern: '{linux,darwin}-*'
           merge-multiple: true
 
       - name: Aggregate checksums
@@ -156,7 +126,6 @@ jobs:
         with:
           files: |
             dist/*.tar.gz
-            dist/*.zip
             dist/checksums.txt
           generate_release_notes: true
           draft: false
