@@ -482,6 +482,12 @@ var allTables = []tableSpec{
 	{"event_mcp_server_connection", mapMCPServerConnection},
 	{"event_skill_activated", mapSkillActivated},
 	{"event_at_mention", mapAtMention},
+	{"codex_event_conversation_starts", mapCodexConversationStarts},
+	{"codex_event_api_request", mapCodexApiRequest},
+	{"codex_event_token_usage", mapCodexTokenUsage},
+	{"codex_event_user_prompt", mapCodexUserPrompt},
+	{"codex_event_tool_decision", mapCodexToolDecision},
+	{"codex_event_tool_result", mapCodexToolResult},
 }
 
 // tableNameFor maps a row's Go type to its DuckDB table. Returns ok=false for
@@ -526,6 +532,18 @@ func tableNameFor(row any) (string, bool) {
 		return "event_skill_activated", true
 	case otlp.EventAtMentionRow:
 		return "event_at_mention", true
+	case otlp.CodexEventConversationStartsRow:
+		return "codex_event_conversation_starts", true
+	case otlp.CodexEventApiRequestRow:
+		return "codex_event_api_request", true
+	case otlp.CodexEventTokenUsageRow:
+		return "codex_event_token_usage", true
+	case otlp.CodexEventUserPromptRow:
+		return "codex_event_user_prompt", true
+	case otlp.CodexEventToolDecisionRow:
+		return "codex_event_tool_decision", true
+	case otlp.CodexEventToolResultRow:
+		return "codex_event_tool_result", true
 	}
 	return "", false
 }
