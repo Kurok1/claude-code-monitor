@@ -217,7 +217,7 @@ func isUserError(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return contains(s, "invalid range") || contains(s, "invalid since")
+	return contains(s, "invalid range") || contains(s, "invalid since") || contains(s, "invalid client")
 }
 
 func contains(s, sub string) bool {
