@@ -8,7 +8,7 @@ import { Sessions } from '../api/sessions';
 import type { SessionDetail } from '../api/sessions';
 import { DonutChart } from '../components/charts/DonutChart';
 import { TOOL_PALETTE, SKILL_PALETTE } from '../lib/palette';
-import { formatTokens, formatPct } from '../lib/format';
+import { formatTokens, formatPct, formatCurrency } from '../lib/format';
 
 interface Props {
   id: string;
@@ -117,6 +117,9 @@ export function SessionDetailView({ id, client, onBack }: Props) {
         />
         <Stat label="请求次数" value={d.requests.toLocaleString()} />
         <Stat label="工具调用" value={d.tool_calls.toLocaleString()} />
+        {d.cost != null && (
+          <Stat label={`成本${d.cost_estimated ? '(含估算)' : ''}`} value={formatCurrency(d.cost)} />
+        )}
         {d.client !== 'codex' && (
           <Stat label="Skill 激活" value={d.skill_activations.toLocaleString()} />
         )}

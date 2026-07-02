@@ -19,6 +19,8 @@ export interface SessionSummary {
   requests: number;
   tool_calls: number;
   skill_activations: number;
+  cost?: number;
+  cost_estimated: boolean;
 }
 
 export interface SessionListResponse {
@@ -46,6 +48,8 @@ export interface SessionDetail {
   requests: number;
   tool_calls: number;
   skill_activations: number;
+  cost?: number;
+  cost_estimated: boolean;
   tools: ToolSlice[];
   skills: SkillSlice[];
   // codex-only:四个原始 token 维度(子集口径:cached ⊂ input、reasoning ⊂ output)
