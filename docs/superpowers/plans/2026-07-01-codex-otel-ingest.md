@@ -94,7 +94,7 @@ go test ./internal/otlp/ -run TestDispatchAllCaptured -v
 
 若名字与 spec 完全对不上（例如无 `codex.` 前缀），停下来把实际名字记入本文件此处，并同步调整 Task 5 中的路由常量后再继续：
 
-> 实测记录（实现时填写）：event.name 位置 = ___，实际事件名样例 = ___
+> 实测记录（2026-07-01，codex-cli 0.142.5）：event.name 位置 = **`event.name` attribute，完整带前缀名**（顶层 EventName 字段回退保留作防御）；实际事件名样例 = `codex.conversation_starts` / `codex.user_prompt` / `codex.api_request` / `codex.startup_phase` / `codex.websocket_connect`；公共属性键（conversation.id / auth_mode / originator / slug / user.account_id / user.email / terminal.type / app.version / event.timestamp）与 spec §3.2 完全一致；api_request 的 duration_ms / error.message / endpoint / attempt 已见实样。**待补**：`codex.sse_event`（response.completed，token 数据）与 tool_decision / tool_result 样本需要一次成功的 API 往返，因本机网络故障暂缺，开发抓包服务保持运行，网络恢复后正常使用一次 Codex 即可补齐。
 
 - [ ] **Step 5: 停服务，提交 config 变更（如有）**
 
