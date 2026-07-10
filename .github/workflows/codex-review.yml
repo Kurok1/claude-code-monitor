@@ -27,20 +27,22 @@ jobs:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
-      - name: Comment "@codex review" on the PR
-        uses: actions/github-script@v7
+      # 前置校验放在独立 shell step:若 secret 为空,github-script 会在
+      # 入参校验层直接抛 "Input required and not supplied: github-token",
+      # 脚本内的友好提示根本没机会执行。
+      - name: Ensure CODEX_TRIGGER_TOKEN is configured
         env:
           CODEX_TRIGGER_TOKEN: ${{ secrets.CODEX_TRIGGER_TOKEN }}
+        run: |
+          if [ -z "$CODEX_TRIGGER_TOKEN" ]; then
+            echo "::error::CODEX_TRIGGER_TOKEN 为空:请在 Settings → Secrets and variables → Actions(注意不是 Codespaces/Dependabot 标签页)添加,值为已连接 Codex 账号的 fine-grained PAT(本仓库 Issues + Pull requests 读写)。"
+            exit 1
+          fi
+      - name: Comment "@codex review" on the PR
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.CODEX_TRIGGER_TOKEN }}
           script: |
-            if (!process.env.CODEX_TRIGGER_TOKEN) {
-              core.setFailed(
-                '缺少 CODEX_TRIGGER_TOKEN secret:用已连接 Codex 的账号创建 ' +
-                'fine-grained PAT(本仓库 Issues + Pull requests 读写)并存入仓库 Secrets。'
-              );
-              return;
-            }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
