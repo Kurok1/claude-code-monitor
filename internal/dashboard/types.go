@@ -235,3 +235,31 @@ type RatesPoint struct {
 	Label  string             `json:"label"`
 	Values map[string]float64 `json:"values"`
 }
+
+// PricingModelsResponse → GET /api/pricing/models?client=
+//
+// Lists models actually seen in the data with their LiteLLM unit prices.
+// enabled=false (pricing off) is a normal state, not an error: models is
+// empty and the table metadata is omitted.
+type PricingModelsResponse struct {
+	Enabled      bool          `json:"enabled"`
+	TableEntries int           `json:"table_entries,omitempty"`
+	LastRefresh  string        `json:"last_refresh,omitempty"`
+	Models       []PricedModel `json:"models"`
+}
+
+// PricedModel is one seen model. Prices are USD per 1M tokens (LiteLLM
+// per-token rates × 1e6); nil means the field is absent in the price table.
+// Matched=false → the model was seen in data but has no price entry (all
+// four rates nil).
+type PricedModel struct {
+	Model                string   `json:"model"`
+	Clients              []string `json:"clients"` // "claude" / "codex", sorted
+	Matched              bool     `json:"matched"`
+	InputPer1M           *float64 `json:"input_per_1m"`
+	OutputPer1M          *float64 `json:"output_per_1m"`
+	CacheReadPer1M       *float64 `json:"cache_read_per_1m"`
+	ReasoningOutputPer1M *float64 `json:"reasoning_output_per_1m"`
+	Requests             int64    `json:"requests"`
+	LastSeen             string   `json:"last_seen"` // RFC3339 UTC
+}
