@@ -1092,3 +1092,70 @@ func QueryThroughputBuckets(ctx context.Context, db *sql.DB, client Client, star
 	}
 	return out, nil
 }
+
+type seenModelRow struct {
+	Model    string
+	LastSeen time.Time
+	Requests int64
+	Client   string // "claude" | "codex"
+}
+
+// QuerySeenModels lists distinct raw models seen in the data, per arm.
+// Claude coverage unions event_api_request (real request counts) with
+// metric_token_usage (coverage only — Requests=0 so counts are not doubled).
+// Placeholder pseudo-models like "<synthetic>" are filtered out. The builder
+// merges rows per model across arms.
+func QuerySeenModels(ctx context.Context, db *sql.DB, client Client) ([]seenModelRow, error) {
+	scanInto := func(q, label, arm string, out []seenModelRow) ([]seenModelRow, error) {
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r seenModelRow
+			if err := rows.Scan(&r.Model, &r.LastSeen, &r.Requests); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.LastSeen = r.LastSeen.UTC()
+			r.Client = arm
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []seenModelRow
+	var err error
+	if client.includesClaude() {
+		const qReq = `
+			SELECT model, MAX(ts), COUNT(*)
+			FROM event_api_request
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(qReq, "seen models (claude api_request)", "claude", out); err != nil {
+			return nil, err
+		}
+		const qMetric = `
+			SELECT model, MAX(ts), 0
+			FROM metric_token_usage
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(qMetric, "seen models (claude metric)", "claude", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT model, MAX(ts), COUNT(*)
+			FROM codex_event_token_usage
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "seen models (codex)", "codex", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
