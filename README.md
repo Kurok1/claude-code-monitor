@@ -300,3 +300,4 @@ gofmt -w .
 ```
 
 更多规范见 [`CLAUDE.md`](CLAUDE.md)。
+
