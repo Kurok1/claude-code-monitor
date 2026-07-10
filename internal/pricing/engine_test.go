@@ -78,3 +78,46 @@ func TestEngineOverridesWinOverFile(t *testing.T) {
 		t.Fatalf("override should win: %v", v.Float64)
 	}
 }
+
+func TestPriceForExactAndNormalized(t *testing.T) {
+	path := writeTempJSON(t, `{
+		"gpt-5.1":{"input_cost_per_token":0.00000125,"output_cost_per_token":0.00001,"cache_read_input_token_cost":0.000000125},
+		"claude-opus-4-8":{"input_cost_per_token":0.000015,"output_cost_per_token":0.000075}
+	}`)
+	e, err := NewEngine(config.PricingConfig{Enabled: true, SourceFile: path}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// 精确匹配
+	p, ok := e.PriceFor("claude-opus-4-8")
+	if !ok {
+		t.Fatal("exact match: want ok=true")
+	}
+	if p.InputCostPerToken == nil || *p.InputCostPerToken != 0.000015 {
+		t.Fatalf("exact match input rate = %v, want 0.000015", p.InputCostPerToken)
+	}
+
+	// 归一化匹配：去 provider/ 前缀 + 去 -YYYY-MM-DD 日期后缀
+	if _, ok := e.PriceFor("openai/gpt-5.1-2025-11-13"); !ok {
+		t.Fatal("normalized match: want ok=true")
+	}
+
+	// 未匹配：ok=false 且【不得】计入 unmatched 统计（只读探测不污染 ingest 观测）
+	if _, ok := e.PriceFor("mystery-model-x"); ok {
+		t.Fatal("unmatched: want ok=false")
+	}
+	if n := e.Stats().Unmatched["mystery-model-x"]; n != 0 {
+		t.Fatalf("PriceFor must not record unmatched, got count %d", n)
+	}
+}
+
+func TestPriceForDisabled(t *testing.T) {
+	e, err := NewEngine(config.PricingConfig{Enabled: false}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	if _, ok := e.PriceFor("gpt-5.1"); ok {
+		t.Fatal("disabled engine: want ok=false")
+	}
+}

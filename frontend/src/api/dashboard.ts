@@ -62,6 +62,19 @@ export interface HeatmapDay {
   score: number;
 }
 
+// 价目表一行:单价为 $/1M tokens;null = 计价表缺该字段;matched=false = 未收录。
+export interface PricedModel {
+  model: string;
+  clients: string[];
+  matched: boolean;
+  input_per_1m: number | null;
+  output_per_1m: number | null;
+  cache_read_per_1m: number | null;
+  reasoning_output_per_1m: number | null;
+  requests: number;
+  last_seen: string;
+}
+
 export interface DashboardData {
   updatedAt: string;
   range: Range;
@@ -98,6 +111,24 @@ export interface DashboardData {
   heatmap: {
     weights: { tokens: number; cost: number; requests: number };
     points: HeatmapDay[];
+  };
+  rates: {
+    bucketInterval: string;
+    speed: {
+      groups: ModelMeta[];
+      points: SeriesPoint[]; // date=桶起点 RFC3339;缺 key = 断线
+      current: number | null;
+      previous: number | null;
+    };
+    throughput: {
+      types: string[];
+      points: SeriesPoint[]; // 空桶为 0
+    };
+  };
+  pricing: {
+    enabled: boolean;
+    tableEntries: number;
+    models: PricedModel[];
   };
 }
 
@@ -259,20 +290,44 @@ interface HeatmapWire {
   }>;
 }
 
+interface RatesWire {
+  range: Range;
+  bucket_interval: string;
+  speed: {
+    groups: string[];
+    points: Array<{ ts: string; label: string; values: Record<string, number> }>;
+    current: number | null;
+    previous: number | null;
+  };
+  throughput: {
+    types: string[];
+    points: Array<{ ts: string; label: string; values: Record<string, number> }>;
+  };
+}
+
+interface PricingWire {
+  enabled: boolean;
+  table_entries?: number;
+  last_refresh?: string;
+  models: PricedModel[];
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Public API
 // ─────────────────────────────────────────────────────────────────────
 
 export const Dashboard = {
   async fetch(range: Range = 'day', since: Since = '7d', client: Client = 'all'): Promise<DashboardData> {
-    const [snap, trends, rankings, heatmap] = await Promise.all([
+    const [snap, trends, rankings, heatmap, rates, pricing] = await Promise.all([
       getJSON<SnapshotWire>(`/api/usage/snapshot?range=${range}&client=${client}`),
       getJSON<TrendsWire>(`/api/usage/trends?range=${range}&client=${client}`),
       // rankings 本期维持 Claude-only(两家工具命名空间不同),不传 client
       getJSON<RankingsWire>(`/api/usage/rankings?since=${since}`),
       getJSON<HeatmapWire>(`/api/usage/heatmap?client=${client}`),
+      getJSON<RatesWire>(`/api/usage/rates?range=${range}&client=${client}`),
+      getJSON<PricingWire>(`/api/pricing/models?client=${client}`),
     ]);
-    return adapt(snap, trends, rankings, heatmap);
+    return adapt(snap, trends, rankings, heatmap, rates, pricing);
   },
 };
 
@@ -281,7 +336,14 @@ function adapt(
   trends: TrendsWire,
   rankings: RankingsWire,
   heatmap: HeatmapWire,
+  rates: RatesWire,
+  pricing: PricingWire,
 ): DashboardData {
+  // rate 点复用 SeriesPoint 形状:wire 的 ts 落到 date 字段
+  const ratePoints = (
+    pts: Array<{ ts: string; label: string; values: Record<string, number> }>,
+  ): SeriesPoint[] => pts.map(p => ({ date: p.ts, label: p.label, values: p.values ?? {} }));
+
   return {
     updatedAt: snap.updated_at,
     range: snap.range,
@@ -309,5 +371,23 @@ function adapt(
     tools: rankings.tools,
     skills: rankings.skills,
     heatmap: { weights: heatmap.weights, points: heatmap.points },
+    rates: {
+      bucketInterval: rates.bucket_interval,
+      speed: {
+        groups: rates.speed.groups.map(g => metaForGroup(g)),
+        points: ratePoints(rates.speed.points),
+        current: rates.speed.current,
+        previous: rates.speed.previous,
+      },
+      throughput: {
+        types: rates.throughput.types,
+        points: ratePoints(rates.throughput.points),
+      },
+    },
+    pricing: {
+      enabled: pricing.enabled,
+      tableEntries: pricing.table_entries ?? 0,
+      models: pricing.models ?? [],
+    },
   };
 }

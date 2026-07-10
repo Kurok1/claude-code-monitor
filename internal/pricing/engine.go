@@ -128,6 +128,21 @@ func (e *Engine) CostFor(model string, c TokenCounts) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: cost, Valid: true}
 }
 
+// PriceFor returns the price entry for model via the same exact→normalized
+// lookup CostFor uses. ok=false when the engine is disabled or the model is
+// unmatched. Read-only display probe: it must NOT touch the unmatched counter
+// (that stat tracks ingest-time misses only).
+func (e *Engine) PriceFor(model string) (ModelPrice, bool) {
+	if !e.enabled {
+		return ModelPrice{}, false
+	}
+	tbl := e.table.Load()
+	if tbl == nil {
+		return ModelPrice{}, false
+	}
+	return (*tbl).lookup(model)
+}
+
 func (e *Engine) recordUnmatched(model string) {
 	e.mu.Lock()
 	e.unmatched[model]++

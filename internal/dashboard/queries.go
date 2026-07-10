@@ -914,3 +914,248 @@ func QueryCodexSessionCost(ctx context.Context, db *sql.DB, conversationID strin
 	}
 	return v, nil
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Rates — /api/usage/rates (speed = output tokens per request-second,
+// throughput = tokens per wall-clock minute)
+//
+// SQL groups by date_trunc('hour', ts) (UTC hours == local hours for the
+// whole-hour-offset zones we support); the builder merges hour rows into
+// 1h/6h/1d buckets via RatesSpec.BucketIndex. Weighted-average numerators
+// and denominators survive that merge losslessly.
+// ─────────────────────────────────────────────────────────────────────
+
+type speedBucketRow struct {
+	Hour      time.Time
+	Model     string
+	OutTokens int64
+	DurMs     int64
+}
+
+// QuerySpeedBuckets returns per-(hour, raw model) sums of output tokens and
+// request duration for [start, end). Rows from both arms are appended as-is —
+// the builder folds models into groups and merges across arms.
+func QuerySpeedBuckets(ctx context.Context, db *sql.DB, client Client, start, end time.Time) ([]speedBucketRow, error) {
+	scanInto := func(q, label string, out []speedBucketRow) ([]speedBucketRow, error) {
+		rows, err := db.QueryContext(ctx, q, start, end)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r speedBucketRow
+			if err := rows.Scan(&r.Hour, &r.Model, &r.OutTokens, &r.DurMs); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.Hour = r.Hour.UTC()
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []speedBucketRow
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h, model,
+			       SUM(output_tokens) AS out_tokens, SUM(duration_ms) AS dur_ms
+			FROM event_api_request
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_tokens > 0
+			GROUP BY 1, 2
+		`
+		if out, err = scanInto(q, "speed buckets (claude)", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h, model,
+			       SUM(output_token_count) AS out_tokens, SUM(duration_ms) AS dur_ms
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_token_count > 0
+			GROUP BY 1, 2
+		`
+		if out, err = scanInto(q, "speed buckets (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+type speedWindow struct {
+	OutTokens int64
+	DurMs     int64
+}
+
+// QuerySpeedWindow returns whole-window numerator/denominator for the speed
+// KPI. Zero DurMs means "no usable requests" — the builder renders null.
+func QuerySpeedWindow(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (speedWindow, error) {
+	var r speedWindow
+	if client.includesClaude() {
+		const q = `
+			SELECT COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_ms), 0)
+			FROM event_api_request
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_tokens > 0
+		`
+		var c speedWindow
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.OutTokens, &c.DurMs); err != nil {
+			return r, fmt.Errorf("query speed window (claude): %w", err)
+		}
+		r.OutTokens += c.OutTokens
+		r.DurMs += c.DurMs
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT COALESCE(SUM(output_token_count), 0), COALESCE(SUM(duration_ms), 0)
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_token_count > 0
+		`
+		var c speedWindow
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.OutTokens, &c.DurMs); err != nil {
+			return r, fmt.Errorf("query speed window (codex): %w", err)
+		}
+		r.OutTokens += c.OutTokens
+		r.DurMs += c.DurMs
+	}
+	return r, nil
+}
+
+type throughputBucketRow struct {
+	Hour          time.Time
+	In            int64
+	Out           int64
+	CacheRead     int64
+	CacheCreation int64
+}
+
+// QueryThroughputBuckets returns per-hour token sums split by type.
+// Codex projection follows the QueryPeriodTokens precedent so client=all
+// stays additive: in = max(input - cached, 0), cacheRead = cached,
+// cacheCreation = 0 (subset semantics folded into parallel semantics).
+func QueryThroughputBuckets(ctx context.Context, db *sql.DB, client Client, start, end time.Time) ([]throughputBucketRow, error) {
+	scanInto := func(q, label string, out []throughputBucketRow) ([]throughputBucketRow, error) {
+		rows, err := db.QueryContext(ctx, q, start, end)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r throughputBucketRow
+			if err := rows.Scan(&r.Hour, &r.In, &r.Out, &r.CacheRead, &r.CacheCreation); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.Hour = r.Hour.UTC()
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []throughputBucketRow
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h,
+			  COALESCE(SUM(CASE WHEN type='input'         THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='output'        THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='cacheRead'     THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='cacheCreation' THEN value END), 0)
+			FROM metric_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1
+		`
+		if out, err = scanInto(q, "throughput buckets (claude)", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h,
+			  COALESCE(SUM(GREATEST(COALESCE(input_token_count, 0) - COALESCE(cached_token_count, 0), 0)), 0),
+			  COALESCE(SUM(COALESCE(output_token_count, 0)), 0),
+			  COALESCE(SUM(COALESCE(cached_token_count, 0)), 0),
+			  0
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1
+		`
+		if out, err = scanInto(q, "throughput buckets (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+type seenModelRow struct {
+	Model    string
+	LastSeen time.Time
+	Requests int64
+	Client   string // "claude" | "codex"
+}
+
+// QuerySeenModels lists distinct raw models seen in the data, per arm.
+// Claude coverage unions event_api_request (real request counts) with
+// metric_token_usage (coverage only — Requests=0 so counts are not doubled).
+// Placeholder pseudo-models like "<synthetic>" are filtered out. The builder
+// merges rows per model across arms.
+func QuerySeenModels(ctx context.Context, db *sql.DB, client Client) ([]seenModelRow, error) {
+	scanInto := func(q, label, arm string, out []seenModelRow) ([]seenModelRow, error) {
+		rows, err := db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r seenModelRow
+			if err := rows.Scan(&r.Model, &r.LastSeen, &r.Requests); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.LastSeen = r.LastSeen.UTC()
+			r.Client = arm
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []seenModelRow
+	var err error
+	if client.includesClaude() {
+		const qReq = `
+			SELECT model, MAX(ts), COUNT(*)
+			FROM event_api_request
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(qReq, "seen models (claude api_request)", "claude", out); err != nil {
+			return nil, err
+		}
+		const qMetric = `
+			SELECT model, MAX(ts), 0
+			FROM metric_token_usage
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(qMetric, "seen models (claude metric)", "claude", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT model, MAX(ts), COUNT(*)
+			FROM codex_event_token_usage
+			WHERE model IS NOT NULL AND model <> '' AND model NOT LIKE '<%'
+			GROUP BY model
+		`
+		if out, err = scanInto(q, "seen models (codex)", "codex", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}

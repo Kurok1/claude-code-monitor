@@ -239,6 +239,8 @@ GET /api/usage/snapshot?range=day|week|month  KPI（tokens/cost/cache 按 range 
 GET /api/usage/trends?range=day|week|month  各模型 Token 用量趋势
 GET /api/usage/rankings?since=7d|30d|all    工具 + Skill Top10 排名（仅 Claude）
 GET /api/usage/heatmap                      360 天用量热点图
+GET /api/usage/rates?range=day|week|month   生产速率：生成速度（tok/s）+ 吞吐率（tok/min），滑动窗口细粒度分桶
+GET /api/pricing/models                     价目表：实际出现过的模型 × LiteLLM 单价（$/1M，需启用 pricing）
 GET /api/sessions?limit=                    会话列表（Claude session + Codex conversation 混排）
 GET /api/sessions/{id}                      会话详情
 GET /internal/healthz                       liveness

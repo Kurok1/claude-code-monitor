@@ -197,3 +197,69 @@ type SessionTokenDetail struct {
 	Cached    int64 `json:"cached"`
 	Reasoning int64 `json:"reasoning"`
 }
+
+// RatesResponse → GET /api/usage/rates?range=&client=
+//
+// Sliding-window rate metrics (spec 2026-07-09): speed = output tokens per
+// request-second (weighted average), throughput = tokens per wall-clock
+// minute split by token type. Buckets: day → 48×1h, week → 28×6h,
+// month → 30×1d; the last bucket is partial (normalized by elapsed time).
+type RatesResponse struct {
+	Range          string          `json:"range"`
+	BucketInterval string          `json:"bucket_interval"` // "1h" / "6h" / "1d"
+	Speed          SpeedBlock      `json:"speed"`
+	Throughput     ThroughputBlock `json:"throughput"`
+}
+
+// SpeedBlock: Groups is the legend order (window output tokens descending).
+// A group absent from a bucket's Values means "no data" (frontend breaks the
+// line). Current/Previous are whole-window weighted averages; nil when the
+// window has no usable requests.
+type SpeedBlock struct {
+	Groups   []string     `json:"groups"`
+	Points   []RatesPoint `json:"points"`
+	Current  *float64     `json:"current"`
+	Previous *float64     `json:"previous"`
+}
+
+// ThroughputBlock: Values carry tokens/min per type; empty buckets are 0.
+type ThroughputBlock struct {
+	Types  []string     `json:"types"` // input / output / cache_read / cache_creation
+	Points []RatesPoint `json:"points"`
+}
+
+// RatesPoint is one bucket. Ts is the RFC3339 UTC bucket start; Label is the
+// local-time display label ("HH:00", or "M/D" at local midnight / day grain).
+type RatesPoint struct {
+	Ts     string             `json:"ts"`
+	Label  string             `json:"label"`
+	Values map[string]float64 `json:"values"`
+}
+
+// PricingModelsResponse → GET /api/pricing/models?client=
+//
+// Lists models actually seen in the data with their LiteLLM unit prices.
+// enabled=false (pricing off) is a normal state, not an error: models is
+// empty and the table metadata is omitted.
+type PricingModelsResponse struct {
+	Enabled      bool          `json:"enabled"`
+	TableEntries int           `json:"table_entries,omitempty"`
+	LastRefresh  string        `json:"last_refresh,omitempty"`
+	Models       []PricedModel `json:"models"`
+}
+
+// PricedModel is one seen model. Prices are USD per 1M tokens (LiteLLM
+// per-token rates × 1e6); nil means the field is absent in the price table.
+// Matched=false → the model was seen in data but has no price entry (all
+// four rates nil).
+type PricedModel struct {
+	Model                string   `json:"model"`
+	Clients              []string `json:"clients"` // "claude" / "codex", sorted
+	Matched              bool     `json:"matched"`
+	InputPer1M           *float64 `json:"input_per_1m"`
+	OutputPer1M          *float64 `json:"output_per_1m"`
+	CacheReadPer1M       *float64 `json:"cache_read_per_1m"`
+	ReasoningOutputPer1M *float64 `json:"reasoning_output_per_1m"`
+	Requests             int64    `json:"requests"`
+	LastSeen             string   `json:"last_seen"` // RFC3339 UTC
+}

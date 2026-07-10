@@ -20,6 +20,7 @@ type Handler struct {
 	cfg            config.DashboardConfig
 	classifier     *Classifier
 	pricingEnabled bool
+	prices         PriceLookup
 	log            *slog.Logger
 }
 
@@ -53,6 +54,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleRankings(w, r)
 	case "/api/usage/heatmap":
 		h.handleHeatmap(w, r)
+	case "/api/usage/rates":
+		h.handleRates(w, r)
+	case "/api/pricing/models":
+		h.handlePricingModels(w, r)
 	case "/api/sessions":
 		h.handleSessionList(w, r)
 	default:
@@ -215,6 +220,58 @@ func (h *Handler) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found {
 		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// SetPriceLookup wires the pricing engine for /api/pricing/models. Optional:
+// when unset the endpoint reports enabled=false. Follows the stats.Server
+// SetRootHandler/SetAPIHandler idiom — must be called before serving starts.
+func (h *Handler) SetPriceLookup(p PriceLookup) {
+	h.prices = p
+}
+
+func (h *Handler) handleRates(w http.ResponseWriter, r *http.Request) {
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "day"
+	}
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tw, err := NowWindow(time.Now(), h.cfg.Timezone)
+	if err != nil {
+		h.log.Error("rates: build time window", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	resp, err := BuildRates(r.Context(), h.db, h.classifier, tw, rng, client)
+	if err != nil {
+		if isUserError(err) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		h.log.Error("rates: build", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) handlePricingModels(w http.ResponseWriter, r *http.Request) {
+	client, err := ParseClient(r.URL.Query().Get("client"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	enabled := h.pricingEnabled && h.prices != nil
+	resp, err := BuildPricingModels(r.Context(), h.db, client, h.prices, enabled)
+	if err != nil {
+		h.log.Error("pricing models: build", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
