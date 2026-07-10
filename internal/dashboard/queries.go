@@ -1027,3 +1027,68 @@ func QuerySpeedWindow(ctx context.Context, db *sql.DB, client Client, start, end
 	}
 	return r, nil
 }
+
+type throughputBucketRow struct {
+	Hour          time.Time
+	In            int64
+	Out           int64
+	CacheRead     int64
+	CacheCreation int64
+}
+
+// QueryThroughputBuckets returns per-hour token sums split by type.
+// Codex projection follows the QueryPeriodTokens precedent so client=all
+// stays additive: in = max(input - cached, 0), cacheRead = cached,
+// cacheCreation = 0 (subset semantics folded into parallel semantics).
+func QueryThroughputBuckets(ctx context.Context, db *sql.DB, client Client, start, end time.Time) ([]throughputBucketRow, error) {
+	scanInto := func(q, label string, out []throughputBucketRow) ([]throughputBucketRow, error) {
+		rows, err := db.QueryContext(ctx, q, start, end)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r throughputBucketRow
+			if err := rows.Scan(&r.Hour, &r.In, &r.Out, &r.CacheRead, &r.CacheCreation); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.Hour = r.Hour.UTC()
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []throughputBucketRow
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h,
+			  COALESCE(SUM(CASE WHEN type='input'         THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='output'        THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='cacheRead'     THEN value END), 0),
+			  COALESCE(SUM(CASE WHEN type='cacheCreation' THEN value END), 0)
+			FROM metric_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1
+		`
+		if out, err = scanInto(q, "throughput buckets (claude)", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h,
+			  COALESCE(SUM(GREATEST(COALESCE(input_token_count, 0) - COALESCE(cached_token_count, 0), 0)), 0),
+			  COALESCE(SUM(COALESCE(output_token_count, 0)), 0),
+			  COALESCE(SUM(COALESCE(cached_token_count, 0)), 0),
+			  0
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			GROUP BY 1
+		`
+		if out, err = scanInto(q, "throughput buckets (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}

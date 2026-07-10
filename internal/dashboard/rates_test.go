@@ -118,3 +118,38 @@ func TestQuerySpeedWindow(t *testing.T) {
 		t.Errorf("empty window = %+v, want zeros", prev)
 	}
 }
+
+func TestQueryThroughputBuckets(t *testing.T) {
+	db, w, _ := testDB(t)
+	spec, _ := w.ResolveRates("day")
+
+	at := time.Date(2026, 5, 13, 1, 30, 0, 0, time.UTC) // 桶 46
+	// Claude 臂:metric_token_usage 四类 delta
+	insertTokenUsage(t, db, at, "claude-opus-4-8", "input", 600)
+	insertTokenUsage(t, db, at, "claude-opus-4-8", "output", 120)
+	insertTokenUsage(t, db, at, "claude-opus-4-8", "cacheRead", 6000)
+	insertTokenUsage(t, db, at, "claude-opus-4-8", "cacheCreation", 300)
+	// Codex 臂投影:input→input-cached(钳0)、cacheRead→cached、cacheCreation→0
+	insertRateCodexUsage(t, db, at, "gpt-5.1-codex", 1000, 400, 1200, 8000) // cached>input,钳 0
+
+	rows, err := QueryThroughputBuckets(context.Background(), db, ClientAll, spec.Start, spec.End)
+	if err != nil {
+		t.Fatalf("QueryThroughputBuckets: %v", err)
+	}
+	// 两臂同一小时 → 各出一行,builder 再合并;这里按小时聚起来断言
+	agg := throughputBucketRow{}
+	for _, r := range rows {
+		if got := spec.BucketIndex(r.Hour); got != 46 {
+			t.Fatalf("bucket idx = %d, want 46", got)
+		}
+		agg.In += r.In
+		agg.Out += r.Out
+		agg.CacheRead += r.CacheRead
+		agg.CacheCreation += r.CacheCreation
+	}
+	// In = 600(claude) + max(1000-1200,0)(codex) = 600
+	// Out = 120 + 400;CacheRead = 6000 + 1200;CacheCreation = 300 + 0
+	if agg.In != 600 || agg.Out != 520 || agg.CacheRead != 7200 || agg.CacheCreation != 300 {
+		t.Errorf("agg = %+v, want in=600 out=520 cacheRead=7200 cacheCreation=300", agg)
+	}
+}
