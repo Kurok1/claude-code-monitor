@@ -153,3 +153,83 @@ func TestQueryThroughputBuckets(t *testing.T) {
 		t.Errorf("agg = %+v, want in=600 out=520 cacheRead=7200 cacheCreation=300", agg)
 	}
 }
+
+func TestBuildRatesWeightedMergeAcrossGroups(t *testing.T) {
+	db, w, _ := testDB(t)
+	c, _ := NewClassifier(nil)
+
+	// 同组两个原始 model(都折叠为 opus-4.8):
+	//   modelA: 500 tok / 10s = 50 tok/s;modelB: 3000 tok / 30s = 100 tok/s
+	// 加权 = 3500*1000/40000 = 87.5;算术平均 75 —— 断言能区分两者
+	at := time.Date(2026, 5, 13, 1, 30, 0, 0, time.UTC) // 桶 46
+	insertRateApiReq(t, db, at, "claude-opus-4-8", 500, 10000)
+	insertRateApiReq(t, db, at, "claude-opus-4-8[1m]", 3000, 30000)
+
+	resp, err := BuildRates(context.Background(), db, c, w, "day", ClientAll)
+	if err != nil {
+		t.Fatalf("BuildRates: %v", err)
+	}
+	if resp.Range != "day" || resp.BucketInterval != "1h" {
+		t.Errorf("meta = %s/%s", resp.Range, resp.BucketInterval)
+	}
+	if len(resp.Speed.Points) != 48 || len(resp.Throughput.Points) != 48 {
+		t.Fatalf("points = %d/%d, want 48/48", len(resp.Speed.Points), len(resp.Throughput.Points))
+	}
+	if len(resp.Speed.Groups) != 1 || resp.Speed.Groups[0] != "opus-4.8" {
+		t.Fatalf("groups = %v, want [opus-4.8]", resp.Speed.Groups)
+	}
+	v, ok := resp.Speed.Points[46].Values["opus-4.8"]
+	if !ok {
+		t.Fatal("bucket 46 missing group value")
+	}
+	if v < 87.49 || v > 87.51 {
+		t.Errorf("weighted speed = %v, want 87.5 (NOT 75)", v)
+	}
+	// 空桶:speed 无该 key(null 语义)
+	if _, ok := resp.Speed.Points[0].Values["opus-4.8"]; ok {
+		t.Error("empty bucket must omit group key")
+	}
+	// KPI:窗口整体加权;previous 空窗口 → null
+	if resp.Speed.Current == nil || *resp.Speed.Current < 87.49 || *resp.Speed.Current > 87.51 {
+		t.Errorf("current = %v, want 87.5", resp.Speed.Current)
+	}
+	if resp.Speed.Previous != nil {
+		t.Errorf("previous = %v, want nil", *resp.Speed.Previous)
+	}
+}
+
+func TestBuildRatesThroughputNormalization(t *testing.T) {
+	db, _, _ := testDB(t)
+	c, _ := NewClassifier(nil)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	// 用 10:30 锚点让末桶(02:00 UTC 起)已流逝 30 分钟
+	w2, err := NowWindow(time.Date(2026, 5, 13, 10, 30, 0, 0, loc), "Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("NowWindow: %v", err)
+	}
+
+	// 满桶(01:00-02:00 UTC,桶 46):600 output → 10 tok/min
+	insertTokenUsage(t, db, time.Date(2026, 5, 13, 1, 30, 0, 0, time.UTC), "claude-opus-4-8", "output", 600)
+	// 末桶(02:00-,桶 47,流逝 30min):300 output → 10 tok/min(除以 30 而非 60)
+	insertTokenUsage(t, db, time.Date(2026, 5, 13, 2, 10, 0, 0, time.UTC), "claude-opus-4-8", "output", 300)
+
+	resp, err := BuildRates(context.Background(), db, c, w2, "day", ClientClaude)
+	if err != nil {
+		t.Fatalf("BuildRates: %v", err)
+	}
+	if len(resp.Throughput.Types) != 4 || resp.Throughput.Types[0] != "input" {
+		t.Fatalf("types = %v", resp.Throughput.Types)
+	}
+	full := resp.Throughput.Points[46].Values["output"]
+	if full < 9.99 || full > 10.01 {
+		t.Errorf("full bucket = %v tok/min, want 10", full)
+	}
+	partial := resp.Throughput.Points[47].Values["output"]
+	if partial < 9.99 || partial > 10.01 {
+		t.Errorf("partial bucket = %v tok/min, want 10 (300 tok / 30 min)", partial)
+	}
+	// 空桶补 0
+	if got := resp.Throughput.Points[0].Values["output"]; got != 0 {
+		t.Errorf("empty bucket = %v, want 0", got)
+	}
+}
