@@ -914,3 +914,116 @@ func QueryCodexSessionCost(ctx context.Context, db *sql.DB, conversationID strin
 	}
 	return v, nil
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Rates — /api/usage/rates (speed = output tokens per request-second,
+// throughput = tokens per wall-clock minute)
+//
+// SQL groups by date_trunc('hour', ts) (UTC hours == local hours for the
+// whole-hour-offset zones we support); the builder merges hour rows into
+// 1h/6h/1d buckets via RatesSpec.BucketIndex. Weighted-average numerators
+// and denominators survive that merge losslessly.
+// ─────────────────────────────────────────────────────────────────────
+
+type speedBucketRow struct {
+	Hour      time.Time
+	Model     string
+	OutTokens int64
+	DurMs     int64
+}
+
+// QuerySpeedBuckets returns per-(hour, raw model) sums of output tokens and
+// request duration for [start, end). Rows from both arms are appended as-is —
+// the builder folds models into groups and merges across arms.
+func QuerySpeedBuckets(ctx context.Context, db *sql.DB, client Client, start, end time.Time) ([]speedBucketRow, error) {
+	scanInto := func(q, label string, out []speedBucketRow) ([]speedBucketRow, error) {
+		rows, err := db.QueryContext(ctx, q, start, end)
+		if err != nil {
+			return nil, fmt.Errorf("query %s: %w", label, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r speedBucketRow
+			if err := rows.Scan(&r.Hour, &r.Model, &r.OutTokens, &r.DurMs); err != nil {
+				return nil, fmt.Errorf("scan %s: %w", label, err)
+			}
+			r.Hour = r.Hour.UTC()
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	var out []speedBucketRow
+	var err error
+	if client.includesClaude() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h, model,
+			       SUM(output_tokens) AS out_tokens, SUM(duration_ms) AS dur_ms
+			FROM event_api_request
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_tokens > 0
+			GROUP BY 1, 2
+		`
+		if out, err = scanInto(q, "speed buckets (claude)", out); err != nil {
+			return nil, err
+		}
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT date_trunc('hour', ts) AS h, model,
+			       SUM(output_token_count) AS out_tokens, SUM(duration_ms) AS dur_ms
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_token_count > 0
+			GROUP BY 1, 2
+		`
+		if out, err = scanInto(q, "speed buckets (codex)", out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+type speedWindow struct {
+	OutTokens int64
+	DurMs     int64
+}
+
+// QuerySpeedWindow returns whole-window numerator/denominator for the speed
+// KPI. Zero DurMs means "no usable requests" — the builder renders null.
+func QuerySpeedWindow(ctx context.Context, db *sql.DB, client Client, start, end time.Time) (speedWindow, error) {
+	var r speedWindow
+	if client.includesClaude() {
+		const q = `
+			SELECT COALESCE(SUM(output_tokens), 0), COALESCE(SUM(duration_ms), 0)
+			FROM event_api_request
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_tokens > 0
+		`
+		var c speedWindow
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.OutTokens, &c.DurMs); err != nil {
+			return r, fmt.Errorf("query speed window (claude): %w", err)
+		}
+		r.OutTokens += c.OutTokens
+		r.DurMs += c.DurMs
+	}
+	if client.includesCodex() {
+		const q = `
+			SELECT COALESCE(SUM(output_token_count), 0), COALESCE(SUM(duration_ms), 0)
+			FROM codex_event_token_usage
+			WHERE ts >= ? AND ts < ?
+			  AND model IS NOT NULL AND model <> ''
+			  AND duration_ms > 0 AND output_token_count > 0
+		`
+		var c speedWindow
+		if err := db.QueryRowContext(ctx, q, start, end).Scan(&c.OutTokens, &c.DurMs); err != nil {
+			return r, fmt.Errorf("query speed window (codex): %w", err)
+		}
+		r.OutTokens += c.OutTokens
+		r.DurMs += c.DurMs
+	}
+	return r, nil
+}
