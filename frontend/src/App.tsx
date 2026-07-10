@@ -3,6 +3,7 @@ import { Icon } from './components/Icon';
 import { Sparkline } from './components/charts/Sparkline';
 import { StackedAreaChart } from './components/charts/StackedAreaChart';
 import type { ChartSeries } from './components/charts/StackedAreaChart';
+import { LineChart } from './components/charts/LineChart';
 import { DonutChart } from './components/charts/DonutChart';
 import { CalendarHeatmap } from './components/charts/CalendarHeatmap';
 import { TweaksPanel, useTweaks } from './components/TweaksPanel';
@@ -292,6 +293,37 @@ export default function App() {
   const costDelta = pctDelta(data.cost.total, data.cost.prev_total);
   const requestsDelta = pctDelta(data.requests.total, data.requests.prev_total);
 
+  const RATES_WINDOW_LABEL: Record<Range, string> = {
+    day: '近 48 小时 · 每小时',
+    week: '近 7 天 · 每 6 小时',
+    month: '近 30 天 · 每天',
+  };
+  const THROUGHPUT_META: Record<string, { label: string; color: string }> = {
+    input: { label: '输入', color: '#3B6FD4' },
+    output: { label: '输出', color: '#D97757' },
+    cache_read: { label: '缓存读', color: '#7B4E9A' },
+    cache_creation: { label: '缓存写', color: '#D4860A' },
+  };
+
+  const speedSeries: ChartSeries[] = data.rates.speed.groups.map(m => ({
+    id: m.id,
+    label: m.label,
+    color: m.color,
+    on: true,
+  }));
+  const throughputSeries: ChartSeries[] = data.rates.throughput.types.map(t => ({
+    id: t,
+    label: THROUGHPUT_META[t]?.label ?? t,
+    color: THROUGHPUT_META[t]?.color ?? 'var(--fg-3)',
+    on: true,
+  }));
+  const speedCur = data.rates.speed.current;
+  const speedPrev = data.rates.speed.previous;
+  const speedDelta =
+    speedCur != null && speedPrev != null && speedPrev > 0
+      ? ((speedCur - speedPrev) / speedPrev) * 100
+      : undefined;
+
   return renderShell(
     <main className="page">
         <div className="page-hero">
@@ -479,6 +511,67 @@ export default function App() {
             <StackedAreaChart points={data.series.points} series={chartSeries} />
           </div>
         </section>
+
+        <div className="section-head">
+          <div>
+            <h2>生产速率</h2>
+            <p>{RATES_WINDOW_LABEL[range]} · 生成速度按请求耗时加权 · 吞吐率按墙钟时间归一</p>
+          </div>
+        </div>
+
+        <div className="cols-2">
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h3>生成速度</h3>
+                <div className="card-sub">output tokens / 请求耗时 · 按模型分组</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="kpi__value" style={{ fontSize: 22 }}>
+                  <span>{speedCur == null ? '—' : speedCur.toFixed(1)}</span>
+                  <span className="kpi__unit">tok/s</span>
+                </div>
+                {speedDelta != null && (
+                  <span className={`kpi__delta ${speedDelta >= 0 ? 'up' : 'down'}`}>
+                    {speedDelta >= 0 ? '↑' : '↓'} {Math.abs(speedDelta).toFixed(1)}% vs 前一窗口
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="trends__legend">
+              {data.rates.speed.groups.map(m => (
+                <span key={m.id} className="legend-chip" data-on>
+                  <span className="legend-chip__dot" style={{ background: m.color }} />
+                  <span>{m.label}</span>
+                </span>
+              ))}
+            </div>
+            <LineChart points={data.rates.speed.points} series={speedSeries} height={240} />
+            <div className="card-sub">注：耗时含首 token 等待，数值略低于纯解码速度；失败请求不计入。</div>
+          </section>
+
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h3>吞吐率</h3>
+                <div className="card-sub">tokens / 分钟 · 按 token 类型</div>
+              </div>
+              <div className="trends__legend">
+                {throughputSeries.map(s => (
+                  <span key={s.id} className="legend-chip" data-on>
+                    <span className="legend-chip__dot" style={{ background: s.color }} />
+                    <span>{s.label}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <StackedAreaChart
+              points={data.rates.throughput.points}
+              series={throughputSeries}
+              height={240}
+            />
+          </section>
+        </div>
 
         {client !== 'codex' && (
         <>
