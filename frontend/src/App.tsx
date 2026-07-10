@@ -324,6 +324,12 @@ export default function App() {
       ? ((speedCur - speedPrev) / speedPrev) * 100
       : undefined;
 
+  // 单价格式化:>=1 保留两位;<1 保留两位有效数字(如 $0.075);null → —
+  const fmtPrice = (v: number | null): string => {
+    if (v == null) return '—';
+    return '$' + (v >= 1 ? v.toFixed(2) : v.toPrecision(2));
+  };
+
   return renderShell(
     <main className="page">
         <div className="page-hero">
@@ -714,6 +720,80 @@ export default function App() {
               ))}
             </tbody>
           </table>
+        </section>
+
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>模型价目表</h3>
+              <div className="card-sub">
+                {data.pricing.enabled
+                  ? `实际使用过的模型 · 单价 $ / 1M tokens · LiteLLM 计价表（${data.pricing.tableEntries.toLocaleString()} 条）`
+                  : '未启用成本估算'}
+              </div>
+            </div>
+          </div>
+          {data.pricing.enabled ? (
+            <>
+              <table className="model-table">
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>客户端</th>
+                    <th className="num">输入</th>
+                    <th className="num">输出</th>
+                    <th className="num">缓存读</th>
+                    <th className="num">推理输出</th>
+                    <th className="num">最近使用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.pricing.models.map(m => (
+                    <tr key={m.model}>
+                      <td>
+                        <div className="model-name" style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5 }}>
+                          {m.model}
+                          {!m.matched && (
+                            <span className="model-tier" style={{ display: 'inline', marginLeft: 8 }}>
+                              未收录
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        {m.clients.map(c => (
+                          <span
+                            key={c}
+                            className={c === 'codex' ? 'client-badge client-badge--codex' : 'client-badge'}
+                          >
+                            {c === 'codex' ? 'Codex' : 'Claude'}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="num">{fmtPrice(m.input_per_1m)}</td>
+                      <td className="num">{fmtPrice(m.output_per_1m)}</td>
+                      <td className="num">{fmtPrice(m.cache_read_per_1m)}</td>
+                      <td className="num">{fmtPrice(m.reasoning_output_per_1m)}</td>
+                      <td className="num">
+                        {new Date(m.last_seen).toLocaleDateString('zh-CN', {
+                          month: 'numeric',
+                          day: 'numeric',
+                        })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="card-sub">
+                注：Claude 实际成本以客户端自报为准，此表仅为参考单价；「未收录」表示该模型不在计价表中。
+              </div>
+            </>
+          ) : (
+            <div className="card-sub">
+              在服务端 config.yaml 中开启 <code>pricing.enabled</code> 并配置{' '}
+              <code>source_file</code>（参考 config.example.yaml）后，这里会展示实际使用过的模型单价。
+            </div>
+          )}
         </section>
 
       </main>

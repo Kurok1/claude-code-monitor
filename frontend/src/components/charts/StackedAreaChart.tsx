@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SeriesPoint } from '../../api/dashboard';
 import { formatTokens } from '../../lib/format';
+import { niceCeil } from './scale';
 
 export interface ChartSeries {
   id: string;
@@ -21,17 +22,6 @@ interface Stop {
   start: number;
   end: number;
   color: string;
-}
-
-export function niceCeil(v: number): number {
-  const pow = Math.pow(10, Math.floor(Math.log10(v)));
-  const m = v / pow;
-  let nice: number;
-  if (m <= 1) nice = 1;
-  else if (m <= 2) nice = 2;
-  else if (m <= 5) nice = 5;
-  else nice = 10;
-  return nice * pow;
 }
 
 // Safe SVG `<defs>` id from a group key — group strings may contain `.`,

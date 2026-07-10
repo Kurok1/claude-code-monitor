@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SeriesPoint } from '../../api/dashboard';
 import type { ChartSeries } from './StackedAreaChart';
-import { niceCeil } from './StackedAreaChart';
+import { niceCeil } from './scale';
 
 interface Props {
   points: SeriesPoint[];
