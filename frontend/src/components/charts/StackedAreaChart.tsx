@@ -23,7 +23,7 @@ interface Stop {
   color: string;
 }
 
-function niceCeil(v: number): number {
+export function niceCeil(v: number): number {
   const pow = Math.pow(10, Math.floor(Math.log10(v)));
   const m = v / pow;
   let nice: number;
