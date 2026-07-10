@@ -106,6 +106,7 @@ func run() error {
 		_ = writer.Stop()
 		return fmt.Errorf("init dashboard handler: %w", err)
 	}
+	dashHandler.SetPriceLookup(priceEngine)
 	statsSrv.SetAPIHandler(dashHandler)
 	if err := statsSrv.Start(); err != nil {
 		_ = writer.Stop()
