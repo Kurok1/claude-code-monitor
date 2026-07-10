@@ -200,3 +200,61 @@ func shanghaiOffsetSeconds(w TimeWindow, at time.Time) int {
 	_, off := at.In(w.Loc).Zone()
 	return off
 }
+
+// RatesSpec is the sliding window + bucketing for /api/usage/rates.
+// Unlike WindowSpec (calendar-aligned KPI windows), rates use trailing
+// windows with sub-day buckets so throughput peaks stay visible.
+//
+// Alignment: 1h buckets sit on hour boundaries (UTC hour == local hour for
+// whole-hour-offset zones, the same constraint localGrainExpr documents);
+// 6h and 1d buckets are anchored at local midnight. Fixed-duration
+// arithmetic is safe for the supported zones (no DST).
+type RatesSpec struct {
+	Range         string        // day / week / month
+	Interval      time.Duration // 1h / 6h / 24h
+	IntervalLabel string        // wire value: "1h" / "6h" / "1d"
+	Start         time.Time     // inclusive bucket-aligned UTC instant
+	End           time.Time     // exclusive; = NowUTC (last bucket is partial)
+	Count         int           // 48 / 28 / 30
+}
+
+// ResolveRates maps a range to its sliding rates window.
+func (w TimeWindow) ResolveRates(rng string) (RatesSpec, error) {
+	switch rng {
+	case "day":
+		cur := w.NowUTC.Truncate(time.Hour)
+		return RatesSpec{
+			Range: "day", Interval: time.Hour, IntervalLabel: "1h",
+			Start: cur.Add(-47 * time.Hour), End: w.NowUTC, Count: 48,
+		}, nil
+	case "week":
+		sinceMidnight := w.NowUTC.Sub(w.TodayStartUTC)
+		cur := w.TodayStartUTC.Add(sinceMidnight.Truncate(6 * time.Hour))
+		return RatesSpec{
+			Range: "week", Interval: 6 * time.Hour, IntervalLabel: "6h",
+			Start: cur.Add(-27 * 6 * time.Hour), End: w.NowUTC, Count: 28,
+		}, nil
+	case "month":
+		return RatesSpec{
+			Range: "month", Interval: 24 * time.Hour, IntervalLabel: "1d",
+			Start: w.TodayStartUTC.Add(-29 * 24 * time.Hour), End: w.NowUTC, Count: 30,
+		}, nil
+	default:
+		return RatesSpec{}, fmt.Errorf("invalid range %q: want day|week|month", rng)
+	}
+}
+
+// BucketIndex maps an hour-truncated UTC instant (as returned by the
+// date_trunc('hour', ts) queries) to its bucket index, or -1 when outside
+// the window.
+func (s RatesSpec) BucketIndex(hour time.Time) int {
+	d := hour.Sub(s.Start)
+	if d < 0 {
+		return -1
+	}
+	idx := int(d / s.Interval)
+	if idx >= s.Count {
+		return -1
+	}
+	return idx
+}

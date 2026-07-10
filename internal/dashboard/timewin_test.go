@@ -210,3 +210,65 @@ func TestSinceStart(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveRates(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 5, 13, 10, 0, 0, 0, loc)
+	w, err := NowWindow(now, "Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("NowWindow: %v", err)
+	}
+
+	cases := []struct {
+		rng      string
+		interval time.Duration
+		label    string
+		count    int
+		start    time.Time // UTC
+	}{
+		// 当前小时桶 = 02:00 UTC，往前 47 个整桶
+		{"day", time.Hour, "1h", 48, time.Date(2026, 5, 11, 3, 0, 0, 0, time.UTC)},
+		// 本地零点 = 05-12 16:00 UTC；now 距零点 10h → 当前 6h 桶起点 = 16:00+6h = 22:00 UTC；往前 27 桶
+		{"week", 6 * time.Hour, "6h", 28, time.Date(2026, 5, 6, 4, 0, 0, 0, time.UTC)},
+		// 当前 1d 桶起点 = 本地今日零点；往前 29 桶
+		{"month", 24 * time.Hour, "1d", 30, time.Date(2026, 4, 13, 16, 0, 0, 0, time.UTC)},
+	}
+	for _, c := range cases {
+		spec, err := w.ResolveRates(c.rng)
+		if err != nil {
+			t.Fatalf("ResolveRates(%s): %v", c.rng, err)
+		}
+		if spec.Interval != c.interval || spec.IntervalLabel != c.label || spec.Count != c.count {
+			t.Errorf("%s: got interval=%v label=%s count=%d", c.rng, spec.Interval, spec.IntervalLabel, spec.Count)
+		}
+		if !spec.Start.Equal(c.start) {
+			t.Errorf("%s: start = %v, want %v", c.rng, spec.Start.UTC(), c.start)
+		}
+		if !spec.End.Equal(w.NowUTC) {
+			t.Errorf("%s: end = %v, want NowUTC", c.rng, spec.End)
+		}
+	}
+
+	if _, err := w.ResolveRates("year"); err == nil {
+		t.Fatal("invalid range must error")
+	}
+}
+
+func TestRatesSpecBucketIndex(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	w, _ := NowWindow(time.Date(2026, 5, 13, 10, 0, 0, 0, loc), "Asia/Shanghai")
+	spec, _ := w.ResolveRates("day") // Start = 05-11 03:00 UTC, 48×1h
+
+	if idx := spec.BucketIndex(time.Date(2026, 5, 11, 3, 0, 0, 0, time.UTC)); idx != 0 {
+		t.Errorf("first bucket idx = %d, want 0", idx)
+	}
+	if idx := spec.BucketIndex(time.Date(2026, 5, 13, 1, 0, 0, 0, time.UTC)); idx != 46 {
+		t.Errorf("hour 05-13 01:00 idx = %d, want 46", idx)
+	}
+	if idx := spec.BucketIndex(time.Date(2026, 5, 11, 2, 0, 0, 0, time.UTC)); idx != -1 {
+		t.Errorf("before window idx = %d, want -1", idx)
+	}
+	if idx := spec.BucketIndex(time.Date(2026, 5, 13, 3, 0, 0, 0, time.UTC)); idx != -1 {
+		t.Errorf("after window idx = %d, want -1", idx)
+	}
+}
