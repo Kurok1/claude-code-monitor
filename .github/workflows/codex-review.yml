@@ -1,0 +1,49 @@
+# @author Kurok1 <im.kurokyhanc@gmail.com>
+# @since v2.5.0
+
+# PR 打开(或 draft 转正式)时自动以仓库所有者身份评论 "@codex review"，
+# 触发 Codex GitHub App(ChatGPT Codex Connector)审核代码。审核结果由
+# Codex 直接以 PR review 形式贴回，不阻断合并。
+#
+# 必要配置:仓库 Secret `CODEX_TRIGGER_TOKEN` —— 用已连接 Codex workspace
+# 的 GitHub 账号创建 fine-grained PAT(仅授权本仓库,Issues + Pull requests
+# 读写)。不能用默认的 GITHUB_TOKEN:github-actions[bot] 未连接 Codex,
+# 它发的 "@codex review" 会被 Codex 拒绝。
+#
+# push 新 commit 不会自动重审(Codex App 机制如此);需要重审时在 PR 里
+# 手动再评论一条 "@codex review"。
+name: Codex Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  trigger-review:
+    name: Trigger Codex review
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment "@codex review" on the PR
+        uses: actions/github-script@v7
+        env:
+          CODEX_TRIGGER_TOKEN: ${{ secrets.CODEX_TRIGGER_TOKEN }}
+        with:
+          github-token: ${{ secrets.CODEX_TRIGGER_TOKEN }}
+          script: |
+            if (!process.env.CODEX_TRIGGER_TOKEN) {
+              core.setFailed(
+                '缺少 CODEX_TRIGGER_TOKEN secret:用已连接 Codex 的账号创建 ' +
+                'fine-grained PAT(本仓库 Issues + Pull requests 读写)并存入仓库 Secrets。'
+              );
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: '@codex review',
+            });
